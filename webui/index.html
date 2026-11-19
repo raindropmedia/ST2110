@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ST 2110 Monitor</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"></span>
+      <div>
+        <div class="title">ST 2110 Monitor</div>
+        <div class="subtitle" id="subtitle">verbinde …</div>
+      </div>
+    </div>
+    <div class="chips" id="chips" aria-live="polite"></div>
+    <div class="controls">
+      <label class="ctl" id="demoCtl" hidden>Störung
+        <select id="demoPreset"></select>
+      </label>
+      <label class="ctl">Zeitfenster
+        <select id="window">
+          <option value="10">10 s</option>
+          <option value="30">30 s</option>
+          <option value="60" selected>60 s</option>
+          <option value="120">120 s</option>
+          <option value="240">240 s</option>
+        </select>
+      </label>
+      <button id="pause" type="button" class="btn">Anhalten</button>
+      <button id="reset" type="button" class="btn">Zurücksetzen</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="tabs" id="tabs" aria-label="Ansichten">
+      <button data-tab="overview" class="active">Übersicht</button>
+      <button data-tab="video">Video ST 2110-21</button>
+      <button data-tab="profile">Paketprofil</button>
+      <button data-tab="audio">Ton ST 2110-30</button>
+      <button data-tab="ptp">PTP</button>
+      <button data-tab="redundancy">ST 2022-7</button>
+      <button data-tab="counters">Pakete</button>
+      <button data-tab="events">Ereignisse <span class="badge" id="eventBadge"></span></button>
+    </nav>
+
+    <main id="main">
+      <div class="banner" id="banner" hidden></div>
+
+      <!-- Übersicht -->
+      <section data-view="overview" class="view active">
+        <div class="tiles" id="overviewTiles"></div>
+        <div class="grid two">
+          <figure class="card"><figcaption>Cinst max je Bild</figcaption><canvas data-chart="ovCinst"></canvas></figure>
+          <figure class="card"><figcaption>VRX je Bild (min/max)</figcaption><canvas data-chart="ovVrx"></canvas></figure>
+          <figure class="card"><figcaption>Ton: DPVR max und TSDF je 200 ms (µs)</figcaption><canvas data-chart="ovAudio"></canvas></figure>
+          <figure class="card"><figcaption>PTP-Korrektur je Sync (ns)</figcaption><canvas data-chart="ovPtp"></canvas></figure>
+        </div>
+      </section>
+
+      <!-- Video -->
+      <section data-view="video" class="view">
+        <div class="toolbar">
+          <div class="seg" data-seg="videoPath"><button data-v="P" class="active">Pfad P</button><button data-v="R">Pfad R</button></div>
+          <label class="ctl"><input type="checkbox" id="logY" checked> Histogramme logarithmisch</label>
+          <span class="hint" id="videoSource"></span>
+        </div>
+        <div class="grid three">
+          <figure class="card"><figcaption>Interpacket-Timing (IPT) <span class="hint">Abstand aufeinanderfolgender Pakete in µs, Soll = TRS</span></figcaption><canvas data-chart="iptHist"></canvas></figure>
+          <figure class="card"><figcaption>Cinst-Histogramm <span class="hint">Pakete im Netzwerkpuffer (Modell C)</span></figcaption><canvas data-chart="cinstHist"></canvas></figure>
+          <figure class="card"><figcaption>VRX-Histogramm <span class="hint">Füllstand des Empfangspuffers</span></figcaption><canvas data-chart="vrxHist"></canvas></figure>
+        </div>
+        <div class="grid two">
+          <figure class="card"><figcaption>Cinst max und VRX je Bild</figcaption><canvas data-chart="vCinstVrx"></canvas></figure>
+          <figure class="card"><figcaption>FPT und Latenz je Bild (µs)</figcaption><canvas data-chart="vFptLat"></canvas></figure>
+          <figure class="card"><figcaption>RTP-Offset je Bild (Takte, 90 kHz)</figcaption><canvas data-chart="vRtp"></canvas></figure>
+          <figure class="card"><figcaption>IPT max je Bild (µs)</figcaption><canvas data-chart="vIptMax"></canvas></figure>
+        </div>
+        <div class="grid two">
+          <div class="card"><h3>Letztes Bild</h3><table class="kv" id="videoLast"></table></div>
+          <div class="card"><h3>Kenngrößen und Grenzwerte</h3><table class="kv" id="videoParams"></table></div>
+          <div class="card"><h3>Gesamt seit Zurücksetzen</h3><table class="kv" id="videoTotal"></table></div>
+          <div class="card"><h3>Fehlerursachen</h3><table class="list" id="videoCauses"></table></div>
+        </div>
+      </section>
+
+      <!-- Paketprofil -->
+      <section data-view="profile" class="view">
+        <div class="toolbar">
+          <div class="seg" data-seg="profilePath"><button data-v="P" class="active">Pfad P</button><button data-v="R">Pfad R</button></div>
+          <div class="seg" data-seg="profileKind"><button data-v="last" class="active">Letztes Bild</button><button data-v="worst">Schlechtestes Bild</button></div>
+          <span class="hint" id="profileInfo"></span>
+        </div>
+        <div class="grid one">
+          <figure class="card tall"><figcaption>Ankunft je Paket gegen Sollzeit <span class="hint">Abweichung von TR_OFFSET + (i+1)·TRS in µs; negativ = früh (Puffer füllt sich), positiv = spät</span></figcaption><canvas data-chart="profDev"></canvas></figure>
+        </div>
+        <div class="grid two">
+          <figure class="card"><figcaption>Cinst über dem Bild</figcaption><canvas data-chart="profCinst"></canvas></figure>
+          <figure class="card"><figcaption>VRX über dem Bild</figcaption><canvas data-chart="profVrx"></canvas></figure>
+          <figure class="card"><figcaption>Ankunftsverlauf <span class="hint">Paketindex über Zeit seit Bildbeginn (µs), gestrichelt = Soll</span></figcaption><canvas data-chart="profShape"></canvas></figure>
+          <div class="card"><h3>Kennwerte des Bildes</h3><table class="kv" id="profileTiming"></table></div>
+        </div>
+      </section>
+
+      <!-- Ton -->
+      <section data-view="audio" class="view">
+        <div class="toolbar">
+          <div class="seg" data-seg="audioPath"><button data-v="P" class="active">Pfad P</button><button data-v="R">Pfad R</button></div>
+          <span class="hint" id="audioInfo"></span>
+        </div>
+        <div class="grid two">
+          <figure class="card"><figcaption>DPVR-Histogramm (µs) <span class="hint">Ankunft gegen RTP-Sollzeit</span></figcaption><canvas data-chart="dpvrHist"></canvas></figure>
+          <figure class="card"><figcaption>Interpacket-Timing Ton (µs)</figcaption><canvas data-chart="aIptHist"></canvas></figure>
+          <figure class="card"><figcaption>DPVR min/max je 200 ms (µs)</figcaption><canvas data-chart="aDpvr"></canvas></figure>
+          <figure class="card"><figcaption>TSDF je 200 ms (µs)</figcaption><canvas data-chart="aTsdf"></canvas></figure>
+        </div>
+        <div class="grid two">
+          <div class="card"><h3>Letzter Zeitraum</h3><table class="kv" id="audioLast"></table></div>
+          <div class="card"><h3>Format und Grenzwerte</h3><table class="kv" id="audioParams"></table></div>
+        </div>
+      </section>
+
+      <!-- PTP -->
+      <section data-view="ptp" class="view">
+        <div class="tiles" id="ptpTiles"></div>
+        <div class="grid two">
+          <figure class="card"><figcaption>Korrektur der Kartenuhr je Sync (ns)</figcaption><canvas data-chart="ptpSeries"></canvas></figure>
+          <figure class="card"><figcaption>Verteilung der Korrekturen (ns)</figcaption><canvas data-chart="ptpHist"></canvas></figure>
+        </div>
+        <p class="note">Quelle: eingebautes PTP von MTL (ptp_sync_notify). Grandmaster-Kennung, Domäne und Pfadverzögerung stellt MTL nicht bereit.</p>
+      </section>
+
+      <!-- 2022-7 -->
+      <section data-view="redundancy" class="view">
+        <div class="tiles" id="redTiles"></div>
+        <div class="grid two">
+          <figure class="card"><figcaption>Pfadversatz R − P je Bild (µs)</figcaption><canvas data-chart="skewSeries"></canvas></figure>
+          <figure class="card"><figcaption>Verteilung des Pfadversatzes (µs)</figcaption><canvas data-chart="skewHist"></canvas></figure>
+        </div>
+        <p class="note">Versatz aus der Ankunft des ersten Pakets je Bild (FPT) auf beiden Pfaden; positiv = Pfad R später.</p>
+      </section>
+
+      <!-- Zähler -->
+      <section data-view="counters" class="view">
+        <div class="grid two">
+          <div class="card"><h3>Video</h3><table class="grid-table" id="countersVideo"></table></div>
+          <div class="card"><h3>Ton</h3><table class="grid-table" id="countersAudio"></table></div>
+        </div>
+        <p class="note">Raten aus der Änderung zwischen zwei Abfragen. „Verloren“ zählt je Pfad vor ST 2022-7, „Unwiederbringlich“ nach der Zusammenführung.</p>
+      </section>
+
+      <!-- Ereignisse -->
+      <section data-view="events" class="view">
+        <div class="toolbar">
+          <div class="seg" data-seg="eventFilter"><button data-v="all" class="active">Alle</button><button data-v="warn">Warnungen und Fehler</button><button data-v="error">Nur Fehler</button></div>
+        </div>
+        <div class="card"><table class="events" id="eventTable"></table></div>
+      </section>
+    </main>
+  </div>
+
+  <div class="tooltip" id="tooltip" hidden></div>
+  <script src="charts.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

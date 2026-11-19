@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Installiert MTL in einer festen Version mit den Skripten von MTL selbst:
 # Build-Pakete (Ubuntu), DPDK mit MTL-Patches, ice-Treiber mit Rate-Limit-Patches, MTL.
+# Vor dem Bau von MTL wendet es die eigenen Patches aus patches/mtl/<version>/ an (Paket-Rückruf
+# für Interpacket-Histogramme und Paketprofile).
 #
 # Aufruf: scripts/install-mtl.sh [schritt ...]
 #   Schritte: packages dpdk ice mtl (Vorgabe: alle in dieser Reihenfolge)
@@ -16,6 +18,8 @@ set -euo pipefail
 MTL_VERSION="${MTL_VERSION:-v26.09}"
 MTL_SRC="${MTL_SRC:-$HOME/src/Media-Transport-Library}"
 MTL_REPO="https://github.com/OpenVisualCloud/Media-Transport-Library.git"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PATCH_DIR="$REPO_ROOT/patches/mtl/$MTL_VERSION"
 
 steps=("$@")
 [ "${#steps[@]}" -gt 0 ] || steps=(packages dpdk ice mtl)
@@ -44,6 +48,26 @@ checkout() {
 	fi
 }
 
+apply_patches() {
+	if [ ! -d "$PATCH_DIR" ]; then
+		echo "Hinweis: keine eigenen Patches für $MTL_VERSION ($PATCH_DIR); Histogramme und Paketprofile fehlen."
+		return
+	fi
+	local patch
+	for patch in "$PATCH_DIR"/*.patch; do
+		[ -e "$patch" ] || continue
+		if git -C "$MTL_SRC" apply --reverse --check "$patch" >/dev/null 2>&1; then
+			echo "Patch bereits angewendet: $(basename "$patch")"
+		elif git -C "$MTL_SRC" apply --check "$patch"; then
+			git -C "$MTL_SRC" apply "$patch"
+			echo "Patch angewendet: $(basename "$patch")"
+		else
+			echo "Fehler: Patch $(basename "$patch") passt nicht zu $MTL_SRC." >&2
+			exit 1
+		fi
+	done
+}
+
 for step in "${steps[@]}"; do
 	case "$step" in
 	packages)
@@ -67,6 +91,8 @@ for step in "${steps[@]}"; do
 		;;
 	mtl)
 		checkout
+		log "Eigene Patches anwenden"
+		apply_patches
 		log "MTL bauen und installieren"
 		(cd "$MTL_SRC" && ./build.sh)
 		sudo ldconfig

@@ -55,9 +55,13 @@ VF (PF im Kernel mit `ptp4l`, VF mit Hardware-Zeitstempeln) gleichwertig misst, 
 
 ```bash
 cmake --preset release && cmake --build --preset release
-sudo ./build/release/st20-timing --port 0000:af:00.0 --local-ip 192.168.100.10 \
-     --ip 239.100.0.1 --udp-port 20000 --fps 50 --duration 60 --output config/local/messung.jsonl
+sudo ./build/release/st2110-monitor --port 0000:af:00.0 --local-ip 192.168.100.10 \
+     --video 239.100.0.1:20000 --video-format 1920x1080p50 --duration 60 \
+     --http 0.0.0.0:8090 --output config/local/messung.jsonl
 ```
+
+Im Log von MTL prüfen, dass PTP synchronisiert und Hardware-Zeitstempel aktiv sind; die Oberfläche warnt,
+wenn Pakete ohne Hardware-Zeitstempel ankommen.
 
 Ohne Sender lässt sich die Kette mit dem Beispielprogramm von MTL auf Port 1 prüfen (Referenzsender,
 `RxTxApp` bzw. `app/sample`), mit TSN-Pacing (`--pacing_way tsn`, nur PF, PTP an).
@@ -68,4 +72,6 @@ Ohne Sender lässt sich die Kette mit dem Beispielprogramm von MTL auf Port 1 pr
 - [ ] Firmware-, Treiber- und DPDK-Version notiert (`docs/MESSUNGEN.md`)
 - [ ] Erste Messung gegen bekannten Sender, Abgleich mit EBU LIST
 - [ ] Rechte: Betrieb ohne root (MTL kann das laut Doku, Einrichtung offen)
+- [ ] Patch aus `patches/mtl/` auf Hardware prüfen (Histogramme, Paketprofil)
+- [ ] Datenpfad unter Last: keine Verluste, während die Web-Oberfläche abfragt
 - [ ] PF- gegen VF-Betrieb vergleichen

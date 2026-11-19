@@ -1,0 +1,124 @@
+From b4bd41eeb7ea6ee02189e849385f107ce600759f Mon Sep 17 00:00:00 2001
+From: ST2110 Messplatz <noreply@anthropic.com>
+Date: Thu, 19 Nov 2026 17:54:22 +0000
+Subject: [PATCH] st2110: per-packet timing parser callback for ST20 and ST30
+ RX
+
+Add notify_tp_packet to st20_rx_ops and st30_rx_ops. The callback receives
+every packet the timing parser evaluates (including redundant copies) with
+RTP timestamp, PTP-corrected arrival time and, for video, the packet index.
+Used by raindropmedia/ST2110 for inter-packet histograms and packet profiles.
+---
+ include/st20_api.h                   | 14 ++++++++++++++
+ include/st30_api.h                   | 13 +++++++++++++
+ lib/src/st2110/st_rx_audio_session.c | 10 +++++++++-
+ lib/src/st2110/st_rx_video_session.c |  2 ++
+ 4 files changed, 38 insertions(+), 1 deletion(-)
+
+diff --git a/include/st20_api.h b/include/st20_api.h
+index cd011ec..1b969d1 100644
+--- a/include/st20_api.h
++++ b/include/st20_api.h
+@@ -241,6 +241,11 @@ extern "C" {
+  * Enable the timing analyze info in the st20_rx_frame_meta
+  */
+ #define ST20_RX_FLAG_TIMING_PARSER_META (MTL_BIT32(22))
++/**
++ * Defined when struct st20_rx_ops has the notify_tp_packet callback
++ * (per-packet timing parser data, added by the raindropmedia/ST2110 patch).
++ */
++#define ST20_RX_TP_PACKET_HOOK 1
+ /**
+  * Flag bit in flags of struct st20_rx_ops.
+  * Only for ST20_TYPE_FRAME_LEVEL.
+@@ -1623,6 +1628,15 @@ struct st20_rx_ops {
+   /* use to store framebuffers on vram */
+   bool gpu_direct_framebuffer_in_vram_device_address;
+   void* gpu_context;
++  /**
++   * Optional. Only for ST20_TYPE_FRAME_LEVEL with ST20_RX_FLAG_TIMING_PARSER_META or
++   * ST20_RX_FLAG_TIMING_PARSER_STAT. Called from the RX tasklet for every packet the timing
++   * parser evaluates, including redundant copies, with the RTP timestamp, the arrival time
++   * (TAI in ns, NIC timestamp corrected to PTP when hw_timestamp is true) and the packet
++   * index in the frame/field. Runs in the data path: must not block and must return fast.
++   */
++  void (*notify_tp_packet)(void* priv, enum mtl_session_port s_port, uint32_t rtp_tmstamp,
++                           uint64_t pkt_ns, int pkt_idx, bool hw_timestamp);
+ };
+ 
+ /**
+diff --git a/include/st30_api.h b/include/st30_api.h
+index 8a2d70f..1c58c8b 100644
+--- a/include/st30_api.h
++++ b/include/st30_api.h
+@@ -121,6 +121,11 @@ typedef struct st_rx_audio_session_handle_impl* st30_rx_handle;
+  * Enable the timing analyze info by st30_rx_tp_meta of notify_timing_parser_result
+  */
+ #define ST30_RX_FLAG_TIMING_PARSER_META (MTL_BIT32(17))
++/**
++ * Defined when struct st30_rx_ops has the notify_tp_packet callback
++ * (per-packet timing parser data, added by the raindropmedia/ST2110 patch).
++ */
++#define ST30_RX_TP_PACKET_HOOK 1
+ 
+ /** default time in the fifo between packet builder and pacing */
+ #define ST30_TX_FIFO_DEFAULT_TIME_MS (10)
+@@ -575,6 +580,14 @@ struct st30_rx_ops {
+    * use st30_get_sample_num to get the number from different ptime and sampling rate.
+    */
+   uint16_t sample_num __mtl_deprecated_msg("Not use anymore, plan to remove");
++  /**
++   * Optional. Only with ST30_RX_FLAG_TIMING_PARSER_META or ST30_RX_FLAG_TIMING_PARSER_STAT.
++   * Called from the RX tasklet for every packet with a valid sequence, including redundant
++   * copies, with the RTP timestamp and the arrival time (TAI in ns, NIC timestamp corrected
++   * to PTP when hw_timestamp is true). Runs in the data path: must not block.
++   */
++  void (*notify_tp_packet)(void* priv, enum mtl_session_port s_port, uint32_t rtp_tmstamp,
++                           uint64_t pkt_ns, bool hw_timestamp);
+ };
+ 
+ /**
+diff --git a/lib/src/st2110/st_rx_audio_session.c b/lib/src/st2110/st_rx_audio_session.c
+index 9a393ac..10da6dd 100644
+--- a/lib/src/st2110/st_rx_audio_session.c
++++ b/lib/src/st2110/st_rx_audio_session.c
+@@ -504,6 +504,10 @@ static int rx_audio_session_handle_frame_pkt(struct mtl_main_impl* impl,
+     dbg("%s(%d,%d), seq %d idx %u already received\n", __func__, s->idx, s_port, seq_id,
+         idx);
+     s->port_user_stats.common.stat_pkts_redundant++;
++    if (s->enable_timing_parser && s->ops.notify_tp_packet)
++      s->ops.notify_tp_packet(s->ops.priv, s_port, tmstamp,
++                              mt_mbuf_time_stamp(impl, mbuf, port),
++                              mt_mbuf_has_hw_time_stamp(impl, mbuf, port));
+     return 0;
+   }
+ 
+@@ -512,7 +516,11 @@ static int rx_audio_session_handle_frame_pkt(struct mtl_main_impl* impl,
+   s->port_user_stats.common.stat_pkts_received++;
+ 
+   if (s->enable_timing_parser) {
+-    ra_tp_on_packet(s, s_port, tmstamp, mt_mbuf_time_stamp(impl, mbuf, port));
++    uint64_t pkt_ns = mt_mbuf_time_stamp(impl, mbuf, port);
++    ra_tp_on_packet(s, s_port, tmstamp, pkt_ns);
++    if (s->ops.notify_tp_packet)
++      s->ops.notify_tp_packet(s->ops.priv, s_port, tmstamp, pkt_ns,
++                              mt_mbuf_has_hw_time_stamp(impl, mbuf, port));
+   }
+ 
+   if (s->frame_recv_size >= s->st30_frame_size) {
+diff --git a/lib/src/st2110/st_rx_video_session.c b/lib/src/st2110/st_rx_video_session.c
+index 45174fe..f9b02ae 100644
+--- a/lib/src/st2110/st_rx_video_session.c
++++ b/lib/src/st2110/st_rx_video_session.c
+@@ -1558,6 +1558,8 @@ static inline void rv_tp_pkt_handle(struct st_rx_video_session_impl* s,
+   }
+ 
+   uint64_t pkt_ns = mt_mbuf_time_stamp(impl, mbuf, port);
++  if (s->ops.notify_tp_packet)
++    s->ops.notify_tp_packet(s->ops.priv, s_port, tmstamp, pkt_ns, pkt_idx, !sw_time);
+   struct st_rv_tp_slot* tp_slot = &tp->slots[slot->idx][s_port];
+   dbg("%s(%d,%d), tmstamp %u pkt_ns %" PRIu64 " pkt_idx %d\n", __func__, s->idx, s_port,
+       tmstamp, pkt_ns, pkt_idx);
+-- 
+2.43.0
+

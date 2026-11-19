@@ -1,9 +1,13 @@
-// st20-timing: Messprogramm für ST 2110-20/-21 auf Basis von MTL.
-// Gibt je Intervall die Timing-Werte als JSON Lines aus (siehe README.md).
+// st2110-monitor: Messgerät für SMPTE ST 2110 auf Basis von MTL (siehe README.md).
 
+#include "core/Monitor.h"
 #include "core/Options.h"
-#include "core/Report.h"
-#include "mtl/St20TimingReceiver.h"
+#include "demo/DemoSource.h"
+#include "web/WebServer.h"
+
+#ifdef ST2110_WITH_MTL
+#include "mtl/MtlSource.h"
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -11,6 +15,13 @@
 #include <fstream>
 #include <iostream>
 #include <thread>
+
+#ifndef ST2110_WEBUI_DIR
+#define ST2110_WEBUI_DIR "webui"
+#endif
+#ifndef ST2110_VERSION
+#define ST2110_VERSION "0.0.0"
+#endif
 
 namespace {
 
@@ -28,8 +39,12 @@ void installSignalHandlers() {
     sigaction(SIGTERM, &action, nullptr);
 }
 
-void writeLine(std::ostream& out, const nlohmann::json& record) {
-    out << record.dump() << '\n' << std::flush;
+bool hasPacketHook() {
+#ifdef ST2110_WITH_MTL
+    return st2110::MtlSource::hasPacketHook();
+#else
+    return false;
+#endif
 }
 
 } // namespace
@@ -39,7 +54,7 @@ int main(int argc, char** argv) {
     using Clock = std::chrono::steady_clock;
 
     const std::vector<std::string> args(argv, argv + argc);
-    const std::string program = args.empty() ? "st20-timing" : args.front();
+    const std::string program = args.empty() ? "st2110-monitor" : args.front();
     const ParseResult parsed = parseOptions(args);
     if (parsed.helpRequested) {
         std::cout << usageText(program);
@@ -57,8 +72,16 @@ int main(int argc, char** argv) {
     }
     const Options& options = *parsed.options;
 
+#ifndef ST2110_WITH_MTL
+    if (!options.demo) {
+        std::cerr << "Fehler: Ohne MTL gebaut – nur --demo ist möglich (MTL installieren, Preset release).\n";
+        return 2;
+    }
+#endif
+
     std::ofstream file;
-    if (!options.outputPath.empty()) {
+    const bool writeRecords = options.outputPath != "-";
+    if (writeRecords && !options.outputPath.empty()) {
         file.open(options.outputPath, std::ios::app);
         if (!file) {
             std::cerr << "Fehler: Ausgabedatei kann nicht geöffnet werden: " << options.outputPath << '\n';
@@ -66,73 +89,101 @@ int main(int argc, char** argv) {
         }
     }
     std::ostream& out = options.outputPath.empty() ? std::cout : file;
+    auto writeLine = [&](const nlohmann::json& record) {
+        if (writeRecords) {
+            out << record.dump() << '\n' << std::flush;
+        }
+    };
 
     installSignalHandlers();
 
-    std::string error;
-    auto receiver = St20TimingReceiver::create(options, error);
-    if (!receiver) {
-        std::cerr << "Fehler: " << error << '\n';
-        return 2;
+    MonitorConfig config;
+    config.video = options.video;
+    config.audio = options.audio;
+    config.hwTimestamp = options.hwTimestamp;
+    config.ptp = options.ptp;
+    config.demo = options.demo;
+    Monitor monitor(config);
+
+    std::unique_ptr<DemoSource> demo;
+#ifdef ST2110_WITH_MTL
+    std::unique_ptr<MtlSource> mtl;
+#endif
+    if (options.demo) {
+        demo = std::make_unique<DemoSource>(options, monitor);
+    } else {
+#ifdef ST2110_WITH_MTL
+        std::string error;
+        mtl = MtlSource::create(options, monitor, error);
+        if (!mtl) {
+            std::cerr << "Fehler: " << error << '\n';
+            return 2;
+        }
+#endif
     }
 
-    writeLine(out, startRecord(options, std::nullopt, std::chrono::system_clock::now()));
+    std::unique_ptr<WebServer> web;
+    if (!options.httpListen.empty()) {
+        std::optional<WebServer::DemoControl> control;
+        if (demo) {
+            DemoSource* d = demo.get();
+            control = WebServer::DemoControl{
+                [] {
+                    std::vector<std::pair<std::string, std::string>> list;
+                    for (const auto& p : DemoSource::presets()) {
+                        list.emplace_back(p.id, p.label);
+                    }
+                    return list;
+                },
+                [d] { return d->preset(); },
+                [d](const std::string& id) { return d->setPreset(id); },
+            };
+        }
+        nlohmann::json info{{"program", "st2110-monitor"},
+                            {"version", ST2110_VERSION},
+                            {"packetHook", options.demo || hasPacketHook()},
+                            {"hwTimestamp", options.hwTimestamp},
+                            {"ptp", options.ptp}};
+        web = std::make_unique<WebServer>(
+            monitor, info, options.webuiDir.empty() ? ST2110_WEBUI_DIR : options.webuiDir, control);
+        std::string host;
+        uint16_t port = 0;
+        parseListen(options.httpListen, host, port);
+        std::string error;
+        if (!web->start(host, port, error)) {
+            std::cerr << "Fehler: " << error << '\n';
+            return 2;
+        }
+        std::cerr << "Web-Oberfläche: http://" << (host == "0.0.0.0" ? "<adresse>" : host) << ':' << port
+                  << "/\n";
+    }
 
-    FrameCounters totalFrames;
-    TimingStats totalPrimary;
-    TimingStats totalRedundant;
-    bool criteriaWritten = false;
+    writeLine(monitor.startRecord());
 
     const auto start = Clock::now();
     auto nextReport = start + std::chrono::seconds(options.intervalSec);
     while (!gStop) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         const auto now = Clock::now();
-        const bool durationReached =
-            options.durationSec > 0 && now - start >= std::chrono::seconds(options.durationSec);
-        if (now < nextReport && !durationReached) {
-            continue;
+        const bool done = options.durationSec > 0 && now - start >= std::chrono::seconds(options.durationSec);
+        if (now >= nextReport || done) {
+            nextReport += std::chrono::seconds(options.intervalSec);
+            writeLine(monitor.takeIntervalRecord());
         }
-        nextReport += std::chrono::seconds(options.intervalSec);
-
-        if (!criteriaWritten) {
-            if (auto criteria = receiver->passCriteria()) {
-                writeLine(out, passCriteriaRecord(*criteria, std::chrono::system_clock::now()));
-                criteriaWritten = true;
-            }
-        }
-
-        auto interval = receiver->takeInterval();
-        totalFrames.merge(interval.frames);
-        totalPrimary.merge(interval.primary);
-        if (interval.redundant) {
-            totalRedundant.merge(*interval.redundant);
-        }
-        writeLine(out, intervalRecord("interval", options.intervalSec, interval.frames, interval.primary,
-                                      interval.redundant ? &*interval.redundant : nullptr,
-                                      std::chrono::system_clock::now()));
-        if (durationReached) {
+        if (done) {
             break;
         }
     }
 
-    receiver->stop();
-    // Rest seit dem letzten Bericht in die Zusammenfassung übernehmen.
-    auto rest = receiver->takeInterval();
-    totalFrames.merge(rest.frames);
-    totalPrimary.merge(rest.primary);
-    if (rest.redundant) {
-        totalRedundant.merge(*rest.redundant);
-    }
+    web.reset();
+    demo.reset();
+#ifdef ST2110_WITH_MTL
+    mtl.reset();
+#endif
+    writeLine(monitor.summaryRecord());
 
-    const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - start).count();
-    writeLine(out, intervalRecord("summary", static_cast<unsigned>(elapsed), totalFrames, totalPrimary,
-                                  options.redundant ? &totalRedundant : nullptr,
-                                  std::chrono::system_clock::now()));
-
-    receiver.reset();
-    if (totalFrames.total() == 0) {
-        std::cerr << "Fehler: Keine Bilder empfangen (Adresse, Port, IGMP, Format prüfen).\n";
+    if (monitor.videoFrames() == 0 && monitor.audioPeriods() == 0) {
+        std::cerr << "Fehler: Nichts empfangen (Adresse, Port, IGMP, Format prüfen).\n";
         return 3;
     }
     return 0;

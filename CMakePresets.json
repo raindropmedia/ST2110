@@ -7,7 +7,7 @@
       "displayName": "Entwicklung (Debug, Tests)",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/dev",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "ST2110_DEV_WEBUI": "ON" }
     },
     {
       "name": "release",

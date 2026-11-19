@@ -12,9 +12,10 @@ Kommerzielle Analyzer sind teuer; EBU LIST wertet nur Mitschnitte offline aus.
 ## Entscheidung
 
 Der Messplatz nutzt die Media Transport Library (MTL, OpenVisualCloud) in einer festen Version
-(Start: `v26.09`). Empfang über die Pipeline-API `st20p_rx` mit `ST20P_RX_FLAG_TIMING_PARSER_META`;
-die Werte je Bild kommen aus `struct st20_rx_tp_meta`, die Grenzwerte aus
-`st20p_rx_timing_parser_critical()`. Eigener Code bleibt in C++20, die Kernlogik (Optionen,
+(Start: `v26.09`). Empfang über `st20_rx` (Bildebene) mit `ST20_RX_FLAG_TIMING_PARSER_META` und
+`st30_rx` mit `ST30_RX_FLAG_TIMING_PARSER_META`; die Werte je Bild kommen aus `struct st20_rx_tp_meta`,
+je 200 ms aus `struct st30_rx_tp_meta`, die Grenzwerte aus `st20_rx_timing_parser_critical()`.
+Werte je Paket über einen eigenen Patch (ADR 0003). Eigener Code bleibt in C++20, die Kernlogik (Optionen,
 Auswertung, Ausgabe) ist von MTL getrennt und ohne Karte testbar.
 
 ## Begründung

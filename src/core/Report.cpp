@@ -15,11 +15,19 @@ json rangeToJson(const Range& range) {
     return json{{"min", range.min()}, {"max", range.max()}, {"mean", range.mean()}};
 }
 
-json statsToJson(const TimingStats& stats) {
-    json causes = json::object();
-    for (const auto& [cause, count] : stats.failedCauses()) {
-        causes[cause] = count;
+namespace {
+
+json causesToJson(const std::map<std::string, uint64_t>& causes) {
+    json out = json::object();
+    for (const auto& [cause, count] : causes) {
+        out[cause] = count;
     }
+    return out;
+}
+
+} // namespace
+
+json statsToJson(const TimingStats& stats) {
     return json{
         {"frames", stats.frames()},
         {"packets", stats.packets()},
@@ -35,7 +43,23 @@ json statsToJson(const TimingStats& stats) {
         {"latencyNs", rangeToJson(stats.latencyNs())},
         {"rtpOffset", rangeToJson(stats.rtpOffset())},
         {"rtpTsDelta", rangeToJson(stats.rtpTsDelta())},
-        {"failedCauses", causes},
+        {"failedCauses", causesToJson(stats.failedCauses())},
+    };
+}
+
+json audioStatsToJson(const AudioStats& stats) {
+    return json{
+        {"periods", stats.periods()},
+        {"packets", stats.packets()},
+        {"verdict", complianceName(stats.worst())},
+        {"counts",
+         {{"narrow", stats.count(Compliance::Narrow)},
+          {"wide", stats.count(Compliance::Wide)},
+          {"failed", stats.count(Compliance::Failed)}}},
+        {"dpvrUs", rangeToJson(stats.dpvrUs())},
+        {"iptNs", rangeToJson(stats.iptNs())},
+        {"tsdfUs", rangeToJson(stats.tsdfUs())},
+        {"failedCauses", causesToJson(stats.failedCauses())},
     };
 }
 
@@ -50,68 +74,22 @@ json passCriteriaToJson(const PassCriteria& c) {
     };
 }
 
-std::string formatName(const Options& options) {
-    std::ostringstream out;
-    out << options.width << 'x' << options.height << (options.interlaced ? 'i' : 'p')
-        << frameRateName(options.rate);
-    return out.str();
+json audioPassToJson(const AudioPassCriteria& c) {
+    return json{{"dpvrMaxNarrowUs", c.dpvrMaxNarrowUs},
+                {"dpvrMaxWideUs", c.dpvrMaxWideUs},
+                {"tsdfMaxNarrowUs", c.tsdfMaxNarrowUs},
+                {"tsdfMaxWideUs", c.tsdfMaxWideUs}};
 }
 
-namespace {
-
-json pathToJson(const PathOptions& path) {
-    json out{{"ip", path.streamIp}, {"udpPort", path.udpPort}};
-    if (!path.sourceIp.empty()) {
-        out["sourceIp"] = path.sourceIp;
+json histogramSummary(const Histogram& h) {
+    if (!h.configured() || h.count() == 0) {
+        return nullptr;
     }
-    return out;
-}
-
-} // namespace
-
-json startRecord(const Options& options, const std::optional<PassCriteria>& criteria,
-                 std::chrono::system_clock::time_point now) {
-    json paths{{"P", pathToJson(options.primary)}};
-    if (options.redundant) {
-        paths["R"] = pathToJson(*options.redundant);
-    }
-    return json{
-        {"type", "start"},
-        {"time", isoTimestamp(now)},
-        {"format", formatName(options)},
-        {"payloadType", options.payloadType},
-        {"hwTimestamp", options.hwTimestamp},
-        {"ptp", options.ptp},
-        {"paths", paths},
-        {"passCriteria", criteria ? passCriteriaToJson(*criteria) : json(nullptr)},
-    };
-}
-
-json passCriteriaRecord(const PassCriteria& criteria, std::chrono::system_clock::time_point now) {
-    return json{{"type", "passCriteria"},
-                {"time", isoTimestamp(now)},
-                {"passCriteria", passCriteriaToJson(criteria)}};
-}
-
-json intervalRecord(const std::string& type, unsigned intervalSec, const FrameCounters& frames,
-                    const TimingStats& primary, const TimingStats* redundant,
-                    std::chrono::system_clock::time_point now) {
-    json paths{{"P", statsToJson(primary)}};
-    if (redundant != nullptr) {
-        paths["R"] = statsToJson(*redundant);
-    }
-    return json{
-        {"type", type},
-        {"time", isoTimestamp(now)},
-        {"intervalSec", intervalSec},
-        {"frames",
-         {{"total", frames.total()},
-          {"complete", frames.complete},
-          {"reconstructed", frames.reconstructed},
-          {"corrupted", frames.corrupted},
-          {"dropped", frames.dropped}}},
-        {"paths", paths},
-    };
+    return json{{"count", h.count()},
+                {"min", h.min()},
+                {"p50", h.percentile(0.5)},
+                {"p99", h.percentile(0.99)},
+                {"max", h.max()}};
 }
 
 std::string isoTimestamp(std::chrono::system_clock::time_point time) {

@@ -1,69 +1,116 @@
 # ST2110 – Messplatz für SMPTE ST 2110
 
-Werkzeuge zum Empfangen und Bewerten von ST-2110-Strömen unter Linux, aufgebaut auf der
-[Intel Media Transport Library (MTL)](https://github.com/OpenVisualCloud/Media-Transport-Library).
-Einsatz: Studio und Lehre an der Hochschule Düsseldorf (HSD), Inbetriebnahme von ST-2110-Geräten,
-Vorarbeit für ST 2110 im [Studio-Gateway](https://github.com/raindropmedia/studio-gateway).
+`st2110-monitor` empfängt ST-2110-Ströme unter Linux mit der
+[Intel Media Transport Library (MTL)](https://github.com/OpenVisualCloud/Media-Transport-Library) und
+bewertet sie wie ein Broadcast-Messgerät: Video-Timing nach ST 2110-21, Ton nach ST 2110-30, PTP und
+ST 2022-7, mit Web-Oberfläche und JSON-Berichten. Einsatz: Studio und Lehre an der Hochschule Düsseldorf
+(HSD), Inbetriebnahme von ST-2110-Geräten, Vorarbeit für ST 2110 im
+[Studio-Gateway](https://github.com/raindropmedia/studio-gateway).
 
-**Stand:** Grundgerüst. Kern und Tests bauen ohne Karte; das Messprogramm ist gegen die Header von
-MTL v26.09 geprüft, aber noch nicht auf Hardware gelaufen.
+**Stand:** Kern, Demo und Oberfläche laufen und sind getestet. Der Empfang über MTL kompiliert und linkt
+gegen MTL v26.09 mit eigenem Patch, ist aber **noch nicht auf einer Karte gelaufen**. Messwerte gelten erst
+nach dem Abgleich mit EBU LIST als belastbar (`docs/MESSUNGEN.md`).
 
-## Was es gibt
+![Übersicht](docs/bilder/uebersicht.png)
 
-| Teil | Zweck |
+## Funktionen
+
+Angelehnt an die Ansichten von Telestream PRISM und Phabrix QxL, soweit MTL die Daten liefert:
+
+| Ansicht | Inhalt |
 | --- | --- |
-| `st20-timing` | Empfängt einen ST-2110-20-Strom (optional mit ST 2022-7) und gibt je Intervall die Timing-Werte nach ST 2110-21 als JSON Lines aus |
-| `scripts/check-e830.sh` | Prüft Karte, Firmware, PCIe, PTP, Hugepages, IOMMU und MTL (ändert nichts) |
-| `scripts/install-mtl.sh` | Installiert MTL in fester Version mit DPDK und gepatchtem `ice`-Treiber |
-| `scripts/setup-host.sh` | Hugepages, Puffer, Port an DPDK binden bzw. zurückgeben |
+| Übersicht | Kacheln je Pfad mit Urteil narrow/wide/failed, Cinst, VRX, FPT, Latenz, RTP-Offset, IPT; Ton DPVR/TSDF; PTP; 2022-7; Verluste; Verläufe |
+| Video ST 2110-21 | **Interpacket-Timing-Histogramm** (IPT, Sollwert TRS), Cinst- und VRX-Histogramm mit narrow/wide-Grenzen, Verläufe je Bild (Cinst, VRX, FPT, Latenz, RTP-Offset, IPT max), Kenngrößen und Grenzwerte, Fehlerursachen |
+| Paketprofil | Ankunft **jedes Pakets** eines Bildes gegen die Sollzeit TR_OFFSET + (i+1)·TRS, Cinst und VRX über dem Bild, Ankunftsverlauf; letztes oder schlechtestes Bild |
+| Ton ST 2110-30 | DPVR- und IPT-Histogramm, DPVR und TSDF je 200 ms mit Grenzen |
+| PTP | Zustand (eingerastet/nicht eingerastet/kein Sync), Korrektur der Kartenuhr je Sync als Verlauf und Histogramm, UTC-Versatz |
+| ST 2022-7 | Pfadversatz R − P je Bild (Verlauf, Histogramm), Verluste je Pfad, rekonstruierte Bilder |
+| Pakete | Pakete, Rate, Datenrate, Verluste, Umordnung, Duplikate, falsche Payload-Typen/SSRC je Pfad |
+| Ereignisse | Urteilswechsel, PTP-Zustand, Paketverluste, beschädigte Bilder mit Zeitstempel |
 
-## Hardware
+Weitere Funktionen: SDP-Import (`--sdp`, auch DUP-Gruppen für 2022-7), JSON-Lines-Berichte je Intervall
+und als Zusammenfassung, Zurücksetzen und Anhalten der Anzeige, **Demo-Betrieb ohne Karte** mit
+umschaltbaren Störungen (Jitter, Bündel, zu spät, Verlust, Pfadversatz, Ton-Jitter, PTP unruhig) für die Lehre.
 
-Referenz ist die **Intel E830-XXVDA2** mit E830-CC-Controller (`8086:12d3`), siehe
-[ADR 0002](docs/adr/0002-netzwerkkarte-e830.md) und [Inbetriebnahme](docs/hardware/e830-xxvda2.md).
-Eine E810 funktioniert ebenfalls (ohne TSN-Pacing, ungenauerer Uhrenabgleich).
+| Bündel (wide) im Video-Timing | Paketprofil des schlechtesten Bildes |
+| --- | --- |
+| ![Video](docs/bilder/video-buendel.png) | ![Paketprofil](docs/bilder/paketprofil-buendel.png) |
+
+## Woher die Werte kommen
+
+- **Urteil und Bildwerte:** Timing-Parser von MTL (`st20_rx_tp_meta`, `st30_rx_tp_meta`), also die
+  Rechnung, die MTL selbst prüft.
+- **Histogramme und Paketprofile:** eigene Auswertung je Paket. Dafür braucht MTL den Patch aus
+  `patches/mtl/` (Rückruf `notify_tp_packet` mit PTP-korrigiertem Hardware-Zeitstempel je Paket,
+  [ADR 0003](docs/adr/0003-paket-rueckruf-als-mtl-patch.md)). Ohne Patch fehlen nur diese Ansichten.
+  Die eigene Auswertung rechnet mit ganzzahligen Zeitabständen; MTL rechnet IPT in `double`, was bei
+  heutiger TAI-Zeit auf 256 ns rastert (siehe `docs/MESSUNGEN.md`).
+- **PTP:** `ptp_sync_notify` von MTL. Grandmaster-Kennung, Domäne und Pfadverzögerung stellt MTL nicht bereit.
+- **Demo:** Ohne MTL-Bilder (Demo) liefert die eigene Auswertung auch Urteil und Bildwerte, mit denselben
+  Formeln und Grenzwerten wie MTL (`src/core/VideoTimingModel.cpp`, `AudioPacketAnalyzer.cpp`).
 
 ## Bauen
 
 ```bash
-# Kern und Tests (jeder Linux-Rechner, ohne MTL)
+# Entwicklung (jeder Linux-Rechner, ohne MTL): Kern, Tests, Demo, Oberfläche aus webui/
 cmake --preset dev && cmake --build --preset dev && ctest --preset dev
+./build/dev/st2110-monitor --demo          # http://127.0.0.1:8090/
 
-# Messplatz (MTL installiert, sonst bricht CMake ab)
-cmake --preset release && cmake --build --preset release
+# Messplatz (MTL mit Patch installiert, scripts/install-mtl.sh)
+cmake --preset release && cmake --build --preset release && sudo cmake --install build/release
 ```
 
 ## Messen
 
 ```bash
-sudo ./build/release/st20-timing --port 0000:af:00.0 --local-ip 192.168.100.10 \
-     --ip 239.100.0.1 --udp-port 20000 --width 1920 --height 1080 --fps 50 --interval 1
+sudo st2110-monitor --port 0000:af:00.0 --local-ip 192.168.100.10 \
+     --red-port 0000:af:00.1 --red-local-ip 192.168.101.10 \
+     --sdp config/local/kamera.sdp --http 0.0.0.0:8090 --output config/local/messung.jsonl
 ```
 
-`--help` zeigt alle Optionen. 1080i50 ist `--fps 50 --interlaced` (Halbbilder je Sekunde, Höhe 1080).
+Oder ohne SDP: `--video 239.100.0.1:20000 --video-format 1920x1080p50 --audio 239.100.0.2:30000
+--audio-format L24/48000/2 --audio-ptime 1`. `--help` zeigt alle Optionen. 1080i50 ist
+`--video-format 1920x1080i50` (Halbbilder je Sekunde, Höhe 1080).
 
-Ausgabe (eine Zeile je Ereignis):
+**Aussagekraft:** Nur mit Hardware-Zeitstempeln und PTP (beides Vorgabe) sind die Werte belastbar.
+`--no-hw-timestamp`, `--no-ptp` und `kernel:`-Ports dienen nur als Funktionstest; die Oberfläche warnt dann.
+
+**Web-Oberfläche:** ohne Anmeldung. Vorgabe ist `127.0.0.1:8090`; im Messnetz nur bewusst mit
+`--http 0.0.0.0:8090` freigeben ([ADR 0004](docs/adr/0004-web-oberflaeche-im-programm.md)).
+
+### JSON Lines
 
 | `type` | Inhalt |
 | --- | --- |
-| `start` | Format, Adressen des Stroms, Hardware-Zeitstempel und PTP an/aus |
-| `passCriteria` | Grenzwerte des Timing-Parsers (Cinst/VRX narrow und wide, TR_OFFSET, Latenz, RTP-Offset) |
-| `interval` | je Pfad `P`/`R`: Urteil, Zähler narrow/wide/failed, Min/Max/Mittel von Cinst, VRX, IPT, FPT, Latenz, RTP-Offset, RTP-Delta, Fehlerursachen; Bildzähler (vollständig, rekonstruiert, beschädigt) |
+| `start` | Formate, Adressen, Hardware-Zeitstempel und PTP an/aus |
+| `interval` | je Intervall: Video je Pfad (Urteil, Zähler, Min/Mittel/Max, Histogramm-Kurzform p50/p99/max), Pfadversatz, Ton je Pfad, PTP, Zähleränderungen |
 | `summary` | dasselbe über die ganze Messung |
 
-Rückgabewerte: 0 = Bilder empfangen, 1 = Optionen fehlerhaft, 2 = MTL-Start fehlgeschlagen,
-3 = keine Bilder empfangen.
+`--output -` schaltet die Berichte ab. Rückgabewerte: 0 = empfangen, 1 = Optionen fehlerhaft,
+2 = Start fehlgeschlagen, 3 = nichts empfangen.
 
-**Aussagekraft:** Nur mit Hardware-Zeitstempeln und PTP (beides Vorgabe) sind die Werte belastbar.
-`--no-hw-timestamp`/`--no-ptp` und `kernel:`-Ports dienen nur als Funktionstest. Vor dem ersten
-Einsatz gegen [EBU LIST](https://github.com/ebu/pi-list) abgleichen (`docs/MESSUNGEN.md`).
+### API
+
+| Aufruf | Zweck |
+| --- | --- |
+| `GET /api/info` | Programmstand, Paket-Rückruf vorhanden, Demo |
+| `GET /api/snapshot?window=60` | alle Werte, Histogramme, Verläufe, Profile, Ereignisse |
+| `POST /api/reset` | Messwerte zurücksetzen |
+| `GET/POST /api/demo` | Störung der Demo abfragen bzw. setzen (`{"preset": "burst"}`) |
+
+## Hardware
+
+Referenz ist die **Intel E830-XXVDA2** mit E830-CC-Controller (`8086:12d3`), siehe
+[ADR 0002](docs/adr/0002-netzwerkkarte-e830.md) und [Inbetriebnahme](docs/hardware/e830-xxvda2.md).
+`scripts/check-e830.sh` prüft den Rechner, `scripts/setup-host.sh` richtet Hugepages und Ports ein.
 
 ## Dokumentation
 
 - [Architekturentscheidungen](docs/adr/README.md)
 - [Inbetriebnahme E830-XXVDA2](docs/hardware/e830-xxvda2.md)
-- [Messungen](docs/MESSUNGEN.md)
+- [Messungen und offene Prüffragen](docs/MESSUNGEN.md)
 
 ## Lizenz
 
-Noch festzulegen. MTL steht unter BSD-3-Clause.
+Noch festzulegen. MTL steht unter BSD-3-Clause; der Patch in `patches/mtl/` ändert MTL-Quelltext und
+folgt dessen Lizenz.

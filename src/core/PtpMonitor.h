@@ -1,0 +1,95 @@
+#pragma once
+
+#include "core/Histogram.h"
+#include "core/TimeSeries.h"
+#include "core/TimingStats.h"
+
+#include <cstdint>
+#include <deque>
+#include <nlohmann/json.hpp>
+
+namespace st2110 {
+
+enum class PtpState { NoSync, Syncing, Locked };
+
+const char* ptpStateName(PtpState state);
+
+// Überwacht das eingebaute PTP von MTL über ptp_sync_notify: je Sync die Korrektur der Kartenuhr
+// (delta, ns) und den UTC-Versatz des Grandmasters. MTL stellt weder Grandmaster-Kennung noch
+// Pfadverzögerung bereit.
+class PtpMonitor {
+  public:
+    struct Settings {
+        double lockThresholdNs = 1000; // |delta| darunter gilt als eingerastet
+        size_t lockSamples = 8;        // so viele aufeinanderfolgende Syncs unter der Schwelle
+        double timeoutSec = 3.0;       // ohne Sync länger als das: "kein Sync"
+    };
+
+    PtpMonitor();
+    explicit PtpMonitor(Settings settings);
+
+    void onSync(double nowSec, int64_t deltaNs, int16_t utcOffset);
+    PtpState state(double nowSec) const;
+
+    uint64_t syncCount() const { return syncs_; }
+    int16_t utcOffset() const { return utcOffset_; }
+    bool hasSync() const { return syncs_ > 0; }
+    int64_t lastDeltaNs() const { return lastDelta_; }
+    double lastSyncSec() const { return lastSyncSec_; }
+
+    const Range& totalDelta() const { return total_; }
+    Range takeInterval();
+    const Histogram& histogram() const { return histogram_; }
+    const TimeSeries& series() const { return series_; }
+    void resetTotals();
+
+    nlohmann::json toJson(double nowSec, double windowSec, size_t maxPoints) const;
+
+  private:
+    Settings settings_;
+    uint64_t syncs_ = 0;
+    int16_t utcOffset_ = 0;
+    int64_t lastDelta_ = 0;
+    double lastSyncSec_ = 0;
+    std::deque<int64_t> recent_;
+    Range total_;
+    Range interval_;
+    Histogram histogram_;
+    TimeSeries series_{20000};
+};
+
+// Laufzeitunterschied zwischen den Pfaden nach ST 2022-7: Ankunft des ersten Pakets eines Bildes
+// auf R minus P (ns, positiv = R später). Ordnet die Bilder über den RTP-Zeitstempel zu.
+class PathSkew {
+  public:
+    PathSkew();
+    // firstPacketNs: Ankunft des ersten Pakets bzw. FPT (beide Pfade gleich bezogen).
+    void add(bool redundant, uint32_t rtpTimestamp, int64_t firstPacketNs, double nowSec);
+
+    const Range& total() const { return total_; }
+    Range takeInterval();
+    const Histogram& histogram() const { return histogram_; }
+    const TimeSeries& series() const { return series_; }
+    bool hasValue() const { return hasLast_; }
+    int64_t last() const { return last_; }
+    void resetTotals();
+
+  private:
+    struct Pending {
+        uint32_t rtp;
+        int64_t ns;
+    };
+    void match(std::deque<Pending>& own, std::deque<Pending>& other, bool redundant, uint32_t rtp, int64_t ns,
+               double nowSec);
+
+    std::deque<Pending> primary_;
+    std::deque<Pending> redundant_;
+    Range total_;
+    Range interval_;
+    Histogram histogram_;
+    TimeSeries series_{20000};
+    int64_t last_ = 0;
+    bool hasLast_ = false;
+};
+
+} // namespace st2110

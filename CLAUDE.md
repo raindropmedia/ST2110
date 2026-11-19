@@ -3,69 +3,96 @@
 ## Projektziel
 
 Messplatz für SMPTE ST 2110 unter Linux auf Basis der Intel Media Transport Library (MTL): Ströme
-empfangen und das Timing nach ST 2110-21 bewerten (Cinst, VRX, IPT, FPT, Latenz, RTP-Offset, Urteil
-narrow/wide), später ST 2110-30/-40, ST 2022-7, PTP-Überwachung und Mitschnitt für EBU LIST.
+empfangen und bewerten wie ein Broadcast-Messgerät (Telestream PRISM, Phabrix QxL als Vorbild):
+Video-Timing nach ST 2110-21, Ton nach ST 2110-30, PTP, ST 2022-7, Web-Oberfläche, JSON-Berichte.
 Einsatz: Studio und Lehre an der HSD; Vorarbeit für ST 2110 im Studio-Gateway (`raindropmedia/studio-gateway`).
 
 - Entscheidungen: `docs/adr/` (vor größeren Änderungen lesen, neue Entscheidungen als ADR ablegen)
 - Inbetriebnahme der Karte: `docs/hardware/e830-xxvda2.md`
-- Messungen: `docs/MESSUNGEN.md`
+- Messungen und offene Prüffragen: `docs/MESSUNGEN.md`
 
 ## Aktueller Stand
 
-Grundgerüst (Branch `tests/initial-setup`): Kernbibliothek mit Tests, Messprogramm `st20-timing`
-(nur gegen die MTL-v26.09-Header kompiliert, nicht gelinkt, nicht auf Hardware gelaufen), Skripte
-für Installation und Prüfung. Referenzkarte E830-XXVDA2 (`8086:12d3`), noch nicht geliefert.
+Branch `tests/initial-setup`. `st2110-monitor` mit Demo, Web-Oberfläche, Video/Ton/PTP/2022-7-Auswertung
+und SDP-Import läuft und ist getestet (doctest, Playwright-Screenshots der Oberfläche). Der MTL-Pfad
+(`src/mtl/MtlSource.cpp`) kompiliert und linkt gegen MTL v26.09 mit Patch, ist aber nicht auf Hardware
+gelaufen. Referenzkarte E830-XXVDA2 (`8086:12d3`), noch nicht geliefert.
 
 ## Tech-Stack
 
-- C++20, CMake ≥ 3.24 mit Presets (`dev` ohne MTL, `release` mit MTL als Pflicht), Ninja
-- MTL `v26.09` (Tag, über `scripts/install-mtl.sh`), gefunden über `pkg-config mtl`; DPDK und
-  `ice`-Treiber in den Versionen aus `versions.env` von MTL
-- nlohmann/json 3.11.3, doctest 2.4.11 (FetchContent, keine Systempakete)
-- Nur Linux (Ubuntu 24.04 auf dem Messrechner)
+- C++20, CMake ≥ 3.24 mit Presets (`dev`: ohne MTL, Oberfläche aus `webui/`; `release`: MTL Pflicht), Ninja
+- MTL `v26.09` mit eigenem Patch (`patches/mtl/v26.09/`, ADR 0003) über `scripts/install-mtl.sh`,
+  gefunden über `pkg-config mtl`
+- nlohmann/json 3.11.3, cpp-httplib 0.65.0, doctest 2.4.11 (FetchContent, keine Systempakete)
+- Web-Oberfläche: HTML/CSS/JS ohne Build-Schritt, eigene Canvas-Diagramme (`webui/charts.js`), keine CDN
 
 ## Build und Test
 
 ```bash
-cmake --preset dev && cmake --build --preset dev && ctest --preset dev      # ohne MTL
-cmake --preset release && cmake --build --preset release                     # mit MTL
+cmake --preset dev && cmake --build --preset dev && ctest --preset dev
+./build/dev/st2110-monitor --demo --output -            # Oberfläche: http://127.0.0.1:8090/
 shellcheck scripts/*.sh
+clang-format --dry-run --Werror src/*/*.cpp src/*/*.h tests/*.cpp
 ```
 
-Ohne Karte lässt sich der MTL-Teil nur kompilieren: Header von MTL v26.09 mit einem
-`mtl_build_config.h`-Ersatz und `g++ -fsyntax-only` prüfen.
+MTL-Pfad ohne Karte prüfen: DPDK und MTL (mit Patch) in ein Präfix bauen und
+`PKG_CONFIG_PATH=<präfix>/lib/x86_64-linux-gnu/pkgconfig cmake -S . -B build/mtl -DST2110_REQUIRE_MTL=ON`;
+`mtl_init` scheitert ohne Karte sauber mit Exit-Code 2.
+
+Oberfläche prüfen: Demo starten, Störung über `POST /api/demo {"preset": "burst"}` setzen, mit
+Playwright Screenshots je Ansicht aufnehmen; Konsolenfehler müssen leer sein, bei 390 px Breite kein
+horizontales Scrollen.
 
 ## Verzeichnisse
 
 | Pfad | Inhalt |
 | --- | --- |
-| `src/core/` | Ohne MTL: `Options` (Kommandozeile, Prüfung), `FrameRate`, `TimingStats` (Auswertung), `Report` (JSON Lines) |
-| `src/mtl/` | `St20TimingReceiver`: MTL-Instanz und `st20p_rx`-Sitzung mit Timing-Parser |
-| `src/app/` | `main.cpp` von `st20-timing` |
+| `src/core/` | Ohne MTL: `Options`, `Sdp`, `FrameRate`, `AudioFormat`, `VideoTimingModel` (Grenzwerte und Urteil wie MTL), `VideoPacketAnalyzer`, `AudioPacketAnalyzer`, `PtpMonitor`/`PathSkew`, `Histogram`, `TimeSeries`, `TimingStats`, `Monitor` (führt alles zusammen, threadsicher), `Report`, `SyntheticSender` |
+| `src/mtl/` | `MtlSource`: MTL-Instanz, `st20_rx`/`st30_rx` mit Timing-Parser, Paket-Rückruf, PTP, Zähler |
+| `src/demo/` | `DemoSource`: synthetische Ströme mit umschaltbaren Störungen |
+| `src/web/` | `WebServer`: statische Dateien und JSON-API |
+| `src/app/` | `main.cpp` von `st2110-monitor` |
+| `webui/` | Oberfläche (`index.html`, `style.css`, `charts.js`, `app.js`) |
 | `tests/` | doctest-Tests für `src/core/` |
+| `patches/mtl/` | eigene Patches für MTL je Version |
 | `scripts/` | `install-mtl.sh`, `check-e830.sh`, `setup-host.sh` |
-| `docs/` | ADRs, Inbetriebnahme, Messungen |
-| `config/local/` | lokale Daten und Messergebnisse (nicht eingecheckt) |
+| `docs/` | ADRs, Inbetriebnahme, Messungen, Bilder der Oberfläche |
+| `config/local/` | lokale Daten, SDP-Dateien und Messergebnisse (nicht eingecheckt) |
 
 ## Konventionen
 
 **Sprache**
-- Bezeichner (Klassen, Funktionen, Variablen, Dateinamen) auf **Englisch**; JSON-Feldnamen englisch.
-- Kommentare, Log-Meldungen, Fehlertexte und Dokumentation auf **Deutsch** (klar, formal, präzise).
+- Bezeichner (Klassen, Funktionen, Variablen, Dateinamen) auf **Englisch**; JSON-Feldnamen englisch mit
+  Einheit im Namen (`fptNs`, `dpvrUs`).
+- Kommentare, Log-Meldungen, Fehlertexte, UI-Texte und Dokumentation auf **Deutsch** (klar, formal, präzise).
 
 **C++**
 - Namespace `st2110`; Klassen `PascalCase`, Funktionen `camelCase`, Member mit Suffix `_`, Konstanten `kName`.
-- Ein Header/Quelle-Paar pro Klasse, `#pragma once`; Formatierung mit `.clang-format`.
-- Keine Warnungen (`-Wall -Wextra -Wpedantic`).
-- MTL-Header nur in `src/mtl/` einbinden; `src/core/` bleibt ohne MTL testbar. Neue Messwerte zuerst als
+- Ein Header/Quelle-Paar pro Klasse, `#pragma once`; Formatierung mit `.clang-format`; keine Warnungen.
+- MTL-Header nur in `src/mtl/`; `src/core/` bleibt ohne MTL testbar. Neue Messwerte zuerst als
   MTL-unabhängige Struktur in `core/` mit Test, dann die Übernahme in `src/mtl/`.
+- Formeln und Grenzwerte folgen MTL (`st_rx_timing_parser.c`), damit eigene Auswertung und MTL-Urteil
+  übereinstimmen. Abweichungen nur begründet und in `docs/MESSUNGEN.md` festhalten (Beispiel: ganzzahlige
+  Zeitdifferenzen statt `double`).
+- Zeitstempel als `uint64_t` ns (TAI); absolute Zeiten in `long double`, Differenzen ganzzahlig.
+- Rückrufe aus MTL laufen im Datenpfad: nichts blockieren, `Monitor` nur kurz sperren. Teure Arbeit
+  (JSON) außerhalb der Sperre (`Monitor::snapshot` kopiert erst).
 - MTL lässt nur eine Instanz je Prozess sinnvoll zu (Einstellungen der Karte gelten prozessweit).
 
+**MTL-Patch**
+- Änderungen an MTL nur als Patch in `patches/mtl/<version>/`, mit Makro zur Erkennung
+  (`ST20_RX_TP_PACKET_HOOK`); der Code muss ohne Patch bauen und laufen.
+- Bei MTL-Versionswechsel: Patch mit `git apply --check` prüfen, `scripts/install-mtl.sh`, ADR 0003 und
+  `docs/MESSUNGEN.md` anpassen.
+
+**Web-Oberfläche**
+- Keine externen Skripte oder Schriften (Messnetz ohne Internet). Texte deutsch, Zahlen mit `de-DE`.
+- Neue Werte zuerst in `Monitor::snapshot()` (Test in `tests/test_monitor.cpp`), dann in `webui/app.js`.
+- Jeder neue Endpunkt im Kommentar von `WebServer.h` und in der README-Tabelle.
+
 **Messen**
-- Werte gelten nur mit Hardware-Zeitstempeln und PTP; Programme müssen deutlich warnen, wenn eines fehlt.
+- Werte gelten nur mit Hardware-Zeitstempeln und PTP; Programm und Oberfläche warnen, wenn eines fehlt.
 - Jede Messung mit Versionen und Aufbau in `docs/MESSUNGEN.md`; neue Funktionen erst gegen EBU LIST abgleichen.
-- MTL-Version nur zusammen mit `scripts/install-mtl.sh`, Doku und erneutem Abgleich wechseln.
 
 **Skripte**
 - Bash mit `set -euo pipefail` (Prüfskripte ohne `-e`), `shellcheck` sauber.
@@ -73,11 +100,12 @@ Ohne Karte lässt sich der MTL-Teil nur kompilieren: Header von MTL v26.09 mit e
 
 **Git**
 - Commits auf Deutsch im Imperativ, mit Issue-Verweis, sobald es Issues gibt.
-- Keine Build-Ordner, Mitschnitte (`*.pcap`) oder Messdaten (`*.jsonl`) einchecken.
+- Keine Build-Ordner, Mitschnitte (`*.pcap`), Messdaten (`*.jsonl`) oder SDP-Dateien aus dem Betrieb einchecken.
 
 ## Bekannte offene Punkte
 
-- PTP-Status (Abstand zum Master, Synchronisation) wird noch nicht ausgegeben (`ptp_sync_notify`).
-- Ob der Timing-Parser ohne Synchronisation verlässliche Urteile liefert, ist ungeprüft.
+- Erste Messung auf Hardware, Abgleich mit EBU LIST (Prüffragen in `docs/MESSUNGEN.md`).
 - PF- gegen VF-Betrieb (MTL bevorzugt VFs, das eingebaute PTP braucht die PF).
-- Erste Messung auf Hardware, Abgleich mit EBU LIST.
+- MTL liefert keine Grandmaster-Kennung, Domäne oder Pfadverzögerung; dafür ggf. `pmc` (linuxptp) im VF-Betrieb.
+- ST 2110-40 (Zusatzdaten), ST 2110-22, NMOS und pcap-Mitschnitt fehlen.
+- Web-Oberfläche ohne Anmeldung.

@@ -1,6 +1,8 @@
 #pragma once
 
+#include "core/AudioFormat.h"
 #include "core/FrameRate.h"
+#include "core/Sdp.h"
 
 #include <cstdint>
 #include <optional>
@@ -9,31 +11,46 @@
 
 namespace st2110 {
 
-// Ein Empfangspfad (ST 2022-7: primär "P", redundant "R").
-struct PathOptions {
+// Ein Port der Karte (ST 2022-7: primär und redundant).
+struct PortOptions {
     // DPDK: PCI-Adresse der PF oder VF ("0000:af:00.0"); ohne DPDK "kernel:<Schnittstelle>".
     std::string port;
     // Eigene IPv4-Adresse am Port (bei DPDK Pflicht, MTL beantwortet damit ARP und IGMP).
     std::string localIp;
-    // Multicast-Gruppe oder Unicast-Adresse des Stroms.
-    std::string streamIp;
-    // Quelladresse für Source-Specific Multicast (optional).
-    std::string sourceIp;
-    uint16_t udpPort = 20000;
+};
+
+// Adresse eines Stroms auf einem Pfad.
+struct FlowAddress {
+    std::string ip; // Multicast-Gruppe oder Unicast-Adresse
+    uint16_t udpPort = 0;
+    std::string sourceIp; // Source-Specific Multicast (optional)
+};
+
+struct VideoFlow {
+    FlowAddress primary;
+    std::optional<FlowAddress> redundant;
+    VideoFormat format;
+    uint8_t payloadType = 96;
+};
+
+struct AudioFlow {
+    FlowAddress primary;
+    std::optional<FlowAddress> redundant;
+    AudioFormat format;
+    uint8_t payloadType = 97;
 };
 
 enum class LogLevel { Debug, Info, Notice, Warning, Error };
 
-// Optionen des Messprogramms st20-timing.
+// Optionen des Messprogramms st2110-monitor.
 struct Options {
-    PathOptions primary;
-    std::optional<PathOptions> redundant;
+    // Synthetische Ströme ohne Karte (Vorführung, Lehre, Test der Oberfläche).
+    bool demo = false;
 
-    uint8_t payloadType = 112;
-    uint32_t width = 1920;
-    uint32_t height = 1080;
-    FrameRate rate = FrameRate::P50;
-    bool interlaced = false;
+    PortOptions primaryPort;
+    std::optional<PortOptions> redundantPort;
+    std::optional<VideoFlow> video;
+    std::optional<AudioFlow> audio;
 
     // Hardware-Zeitstempel der Karte für jedes empfangene Paket (MTL_FLAG_ENABLE_HW_TIMESTAMP).
     bool hwTimestamp = true;
@@ -44,27 +61,31 @@ struct Options {
     unsigned intervalSec = 1;
     unsigned durationSec = 0;
 
-    // CPU-Kerne für MTL (z. B. "4-7"), leer = Vorgabe von MTL.
     std::string lcores;
     LogLevel logLevel = LogLevel::Info;
 
-    // Ausgabe der Berichte: leer = stdout, sonst Datei (JSON Lines, wird angehängt).
+    // Berichte als JSON Lines: leer = stdout, "-" = keine, sonst Datei (wird angehängt).
     std::string outputPath;
+
+    // Web-Oberfläche: "adresse:port", leer = aus.
+    std::string httpListen = "127.0.0.1:8090";
+    // Ordner mit index.html (Vorgabe: beim Bauen festgelegt).
+    std::string webuiDir;
 };
 
 struct ParseResult {
     std::optional<Options> options;
-    // Fehlermeldungen (deutsch); leer, wenn options gesetzt ist oder Hilfe verlangt wurde.
     std::vector<std::string> errors;
-    // Hinweise, die den Start nicht verhindern (z. B. Messung ohne Hardware-Zeitstempel).
     std::vector<std::string> warnings;
     bool helpRequested = false;
 };
 
-// Liest die Kommandozeile (argv[0] wird übersprungen) und prüft die Werte.
-ParseResult parseOptions(const std::vector<std::string>& args);
+// Liest die Kommandozeile (argv[0] wird übersprungen) und prüft die Werte. readFile liest SDP-Dateien
+// (für Tests austauschbar); liefert false, wenn die Datei fehlt.
+using FileReader = bool (*)(const std::string& path, std::string& content);
+bool readTextFile(const std::string& path, std::string& content);
+ParseResult parseOptions(const std::vector<std::string>& args, FileReader readFile = readTextFile);
 
-// Prüft eine bereits gefüllte Struktur; liefert Fehler und Hinweise.
 void validateOptions(const Options& options, std::vector<std::string>& errors,
                      std::vector<std::string>& warnings);
 
@@ -74,5 +95,9 @@ bool isPciAddress(const std::string& text);
 bool isKernelPort(const std::string& text);
 bool isIpv4Address(const std::string& text);
 bool isMulticastIpv4(const std::string& text);
+// "239.1.1.1:20000"
+std::optional<FlowAddress> parseFlowAddress(const std::string& text);
+// "127.0.0.1:8090" -> Host und Port
+bool parseListen(const std::string& text, std::string& host, uint16_t& port);
 
 } // namespace st2110
