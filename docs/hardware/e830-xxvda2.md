@@ -1,0 +1,71 @@
+# Inbetriebnahme: Intel E830-XXVDA2
+
+Schritte vom leeren Rechner bis zur ersten Messung. Die Befehle beziehen sich auf MTL `v26.09`
+(siehe `scripts/install-mtl.sh`). Ungeprüft auf echter Hardware – Abweichungen hier nachtragen.
+
+## 1. Hardware
+
+| Punkt | Vorgabe |
+| --- | --- |
+| Karte | E830-XXVDA2 mit E830-CC-Controller, PCI-ID `8086:12d3` |
+| Steckplatz | PCIe 4.0 x8 (3.0 x8 reicht für 2 × 25G; x4 bremst) |
+| CPU/NUMA | Karte und isolierte Kerne am selben NUMA-Knoten |
+| Verwaltung | eigene Netzwerkkarte (Onboard) – der Messport gehört DPDK |
+| Module | SFP28 (25G) oder SFP+ (10G) nach Intel-Kompatibilitätsliste, alternativ DAC |
+| Netz | PTP-fähiger Switch, Grandmaster; IGMP-Snooping/Querier für Multicast |
+
+## 2. BIOS
+
+- VT-d (IOMMU) einschalten, SR-IOV nach Bedarf.
+- Energiesparfunktionen für die Messkerne reduzieren (C-States, Turbo nach Bedarf festlegen).
+
+## 3. Betriebssystem (Ubuntu 24.04)
+
+Kernel-Kommandozeile in `/etc/default/grub` (`GRUB_CMDLINE_LINUX_DEFAULT`), Kerne an die Maschine anpassen:
+
+```text
+intel_iommu=on iommu=pt default_hugepagesz=2M hugepagesz=2M hugepages=2048 isolcpus=4-7 nohz_full=4-7 rcu_nocbs=4-7
+```
+
+Danach `sudo update-grub` und Neustart. Ohne Eintrag in GRUB: `sudo scripts/setup-host.sh hugepages 2048`.
+
+## 4. Software
+
+```bash
+scripts/install-mtl.sh                 # Pakete, DPDK, ice-Treiber, MTL (dauert)
+scripts/check-e830.sh                  # Karte, Firmware, PTP, Hugepages, IOMMU, MTL prüfen
+```
+
+Firmware (NVM) bei Bedarf mit dem NVM-Update-Paket von Intel aktualisieren
+(MTL `doc/e800_series_drivers.md`, Abschnitt NVM). Nach jedem Kernel-Update `scripts/install-mtl.sh ice`.
+
+## 5. Port an DPDK übergeben
+
+```bash
+sudo -E scripts/setup-host.sh bind 0000:af:00.0   # PF von Port 0 (eingebautes PTP!)
+```
+
+Zurück an den Kernel: `sudo -E scripts/setup-host.sh unbind 0000:af:00.0`.
+
+PF oder VF: MTL selbst arbeitet bevorzugt mit VFs (`nicctl.sh create_vf`). Das eingebaute PTP von MTL
+braucht aber die Hardware-Uhr der PF; dieses Grundgerüst nutzt deshalb die PF direkt. Ob der Betrieb mit
+VF (PF im Kernel mit `ptp4l`, VF mit Hardware-Zeitstempeln) gleichwertig misst, ist offen.
+
+## 6. Erste Messung
+
+```bash
+cmake --preset release && cmake --build --preset release
+sudo ./build/release/st20-timing --port 0000:af:00.0 --local-ip 192.168.100.10 \
+     --ip 239.100.0.1 --udp-port 20000 --fps 50 --duration 60 --output config/local/messung.jsonl
+```
+
+Ohne Sender lässt sich die Kette mit dem Beispielprogramm von MTL auf Port 1 prüfen (Referenzsender,
+`RxTxApp` bzw. `app/sample`), mit TSN-Pacing (`--pacing_way tsn`, nur PF, PTP an).
+
+## Offene Punkte
+
+- [ ] Karte geliefert, Controller-Variante (`12d3`) bestätigt
+- [ ] Firmware-, Treiber- und DPDK-Version notiert (`docs/MESSUNGEN.md`)
+- [ ] Erste Messung gegen bekannten Sender, Abgleich mit EBU LIST
+- [ ] Rechte: Betrieb ohne root (MTL kann das laut Doku, Einrichtung offen)
+- [ ] PF- gegen VF-Betrieb vergleichen

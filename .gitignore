@@ -1,0 +1,16 @@
+# Build-Ordner
+build/
+out/
+
+# Lokale Konfigurationen, Mitschnitte und Messdaten
+config/local/*
+!config/local/.gitkeep
+*.pcap
+*.pcapng
+*.jsonl
+
+# Editoren
+.vscode/
+.idea/
+*.swp
+.DS_Store
