@@ -1,8 +1,9 @@
 // st2110-monitor: Messgerät für SMPTE ST 2110 auf Basis von MTL (siehe README.md).
 
-#include "core/Monitor.h"
+#include "core/MonitorHub.h"
 #include "core/Options.h"
 #include "demo/DemoSource.h"
+#include "discovery/Discovery.h"
 #include "web/WebServer.h"
 
 #ifdef ST2110_WITH_MTL
@@ -72,9 +73,11 @@ int main(int argc, char** argv) {
     }
     const Options& options = *parsed.options;
 
+    // Ohne Port und Flows: nur Erkennung (Netz-Scanner), MTL wird nicht gestartet.
+    const bool scannerOnly = !options.demo && options.primaryPort.port.empty();
 #ifndef ST2110_WITH_MTL
-    if (!options.demo) {
-        std::cerr << "Fehler: Ohne MTL gebaut – nur --demo ist möglich (MTL installieren, Preset release).\n";
+    if (!options.demo && !scannerOnly) {
+        std::cerr << "Fehler: Ohne MTL gebaut – nur --demo oder reine Erkennung (--discover) möglich.\n";
         return 2;
     }
 #endif
@@ -97,29 +100,41 @@ int main(int argc, char** argv) {
 
     installSignalHandlers();
 
-    MonitorConfig config;
-    config.video = options.video;
-    config.audio = options.audio;
+    HubConfig config;
     config.hwTimestamp = options.hwTimestamp;
     config.ptp = options.ptp;
     config.demo = options.demo;
-    Monitor monitor(config);
+    config.maxFlows = options.maxFlows;
+    config.discoverInterface = options.discoverInterface;
+    MonitorHub hub(config);
 
     std::unique_ptr<DemoSource> demo;
+    FlowController* controller = nullptr;
 #ifdef ST2110_WITH_MTL
     std::unique_ptr<MtlSource> mtl;
 #endif
     if (options.demo) {
-        demo = std::make_unique<DemoSource>(options, monitor);
-    } else {
+        demo = std::make_unique<DemoSource>(options, hub);
+        controller = demo.get();
+    } else if (!scannerOnly) {
 #ifdef ST2110_WITH_MTL
         std::string error;
-        mtl = MtlSource::create(options, monitor, error);
+        mtl = MtlSource::create(options, hub, error);
         if (!mtl) {
             std::cerr << "Fehler: " << error << '\n';
             return 2;
         }
+        controller = mtl.get();
 #endif
+    }
+
+    std::unique_ptr<Discovery> discovery;
+    if (!options.discoverInterface.empty()) {
+        discovery = std::make_unique<Discovery>(hub, options.discoverInterface, options.sap);
+        std::string error;
+        if (!discovery->start(error)) {
+            std::cerr << "Hinweis: Erkennung nicht verfügbar: " << error << '\n';
+        }
     }
 
     std::unique_ptr<WebServer> web;
@@ -145,7 +160,7 @@ int main(int argc, char** argv) {
                             {"hwTimestamp", options.hwTimestamp},
                             {"ptp", options.ptp}};
         web = std::make_unique<WebServer>(
-            monitor, info, options.webuiDir.empty() ? ST2110_WEBUI_DIR : options.webuiDir, control);
+            hub, controller, info, options.webuiDir.empty() ? ST2110_WEBUI_DIR : options.webuiDir, control);
         std::string host;
         uint16_t port = 0;
         parseListen(options.httpListen, host, port);
@@ -158,7 +173,7 @@ int main(int argc, char** argv) {
                   << "/\n";
     }
 
-    writeLine(monitor.startRecord());
+    writeLine(hub.startRecord());
 
     const auto start = Clock::now();
     auto nextReport = start + std::chrono::seconds(options.intervalSec);
@@ -168,7 +183,7 @@ int main(int argc, char** argv) {
         const bool done = options.durationSec > 0 && now - start >= std::chrono::seconds(options.durationSec);
         if (now >= nextReport || done) {
             nextReport += std::chrono::seconds(options.intervalSec);
-            writeLine(monitor.takeIntervalRecord());
+            writeLine(hub.takeIntervalRecord());
         }
         if (done) {
             break;
@@ -176,13 +191,14 @@ int main(int argc, char** argv) {
     }
 
     web.reset();
+    discovery.reset();
     demo.reset();
 #ifdef ST2110_WITH_MTL
     mtl.reset();
 #endif
-    writeLine(monitor.summaryRecord());
+    writeLine(hub.summaryRecord());
 
-    if (monitor.videoFrames() == 0 && monitor.audioPeriods() == 0) {
+    if (!hub.flows().empty() && hub.received() == 0) {
         std::cerr << "Fehler: Nichts empfangen (Adresse, Port, IGMP, Format prüfen).\n";
         return 3;
     }

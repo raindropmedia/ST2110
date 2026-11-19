@@ -8,15 +8,12 @@
 #include "core/VideoPacketAnalyzer.h"
 
 #include <array>
-#include <chrono>
-#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
-#include <vector>
 
 namespace st2110 {
 
@@ -52,30 +49,23 @@ struct StreamCounters {
     uint64_t framesIncomplete = 0;
 };
 
-enum class Media { Video, Audio };
-
-struct MonitorConfig {
-    std::optional<VideoFlow> video;
-    std::optional<AudioFlow> audio;
-    bool hwTimestamp = true;
-    bool ptp = true;
-    bool demo = false;
-};
-
-// Sammelt alle Messwerte, wertet sie aus und liefert Zustände für die Web-Oberfläche und die
-// JSON-Berichte. Threadsicher: alle öffentlichen Funktionen sperren einen gemeinsamen Mutex
-// (die Paketfunktionen laufen im Datenpfad von MTL und halten ihn nur kurz).
+// Wertet einen Flow aus und liefert Zustände für die Web-Oberfläche und die JSON-Berichte.
+// Threadsicher: alle öffentlichen Funktionen sperren einen Mutex des Flows (die Paketfunktionen laufen
+// im Datenpfad von MTL und halten ihn nur kurz).
 //
 // Bildwerte: Kommen Bilder aus MTL (onVideoFrame), zählen deren Timing-Werte; die eigene
-// Paketanalyse liefert dann nur Histogramme und Profile. Ohne MTL-Bilder (Demo, Ton) zählen die
+// Paketanalyse liefert dann nur Histogramme und Profile. Ohne MTL-Bilder (Demo) zählen die
 // Werte der eigenen Analyse.
-class Monitor {
+class FlowMonitor {
   public:
     using Clock = std::function<double()>; // Sekunden, monoton
+    // Ereignis an den Hub: Flow-ID, Stufe ("info" | "warn" | "error"), Text.
+    using EventSink = std::function<void(const std::string&, const std::string&, const std::string&)>;
 
-    explicit Monitor(MonitorConfig config, Clock clock = {});
+    explicit FlowMonitor(FlowConfig config, EventSink sink = {}, Clock clock = {});
 
-    const MonitorConfig& config() const { return config_; }
+    const FlowConfig& config() const { return config_; }
+    const std::string& id() const { return config_.id; }
 
     void onVideoPacket(Path path, uint32_t rtpTimestamp, uint64_t arrivalNs, int packetIndex,
                        bool hwTimestamp);
@@ -86,23 +76,22 @@ class Monitor {
     void onAudioPacket(Path path, uint32_t rtpTimestamp, uint64_t arrivalNs, bool hwTimestamp);
     void onAudioPeriod(Path path, const AudioTiming& timing);
 
-    void onPtpSync(int64_t deltaNs, int16_t utcOffset);
-    void setCounters(Media media, const StreamCounters& counters);
-
-    // Hinweis oder Fehler in das Ereignisprotokoll schreiben (z. B. von der Datenquelle).
+    void setCounters(const StreamCounters& counters);
     void addEvent(const std::string& level, const std::string& text);
-
-    // Setzt Histogramme, Gesamtwerte, Profile und Ereignisse zurück (Taste "Zurücksetzen").
     void reset();
 
-    // Vollständiger Zustand für die Web-Oberfläche (Verläufe der letzten windowSec Sekunden).
+    // Kurzform für die Flow-Liste: Adressen, Format, Urteil und Datenrate je Pfad.
+    nlohmann::json summary();
+    // Vollständiger Zustand des Flows (Verläufe der letzten windowSec Sekunden).
     nlohmann::json snapshot(double windowSec = 60.0);
-    nlohmann::json startRecord();
+    // Werte seit dem letzten Aufruf (für JSON Lines) bzw. über die ganze Messung.
     nlohmann::json takeIntervalRecord();
     nlohmann::json summaryRecord();
 
-    uint64_t videoFrames() const;
-    uint64_t audioPeriods() const;
+    // true, wenn Ziel (und, falls angegeben, Quelle) zu einem Pfad des Flows passen.
+    bool matches(const std::string& ip, uint16_t port) const;
+    // Empfangene Bilder bzw. Ton-Zeiträume (Rückgabewert des Programms).
+    uint64_t received() const;
 
   private:
     struct VideoPath {
@@ -121,15 +110,14 @@ class Monitor {
         std::optional<AudioTiming> lastPeriod;
         TimeSeries dpvrMaxUs, dpvrMinUs, tsdfUs, iptMaxNs;
     };
-    struct Event {
-        double t;
-        std::string time;
-        std::string level;
-        std::string text;
-    };
     struct CounterState {
         StreamCounters current;
         StreamCounters lastInterval;
+        StreamCounters rateBase;
+        double rateTime = 0;
+        std::array<double, kPathCount> pps{};
+        std::array<double, kPathCount> bps{};
+        bool ratesValid = false;
         bool any = false;
     };
 
@@ -157,25 +145,24 @@ class Monitor {
         uint64_t audioSwPackets = 0;
         PathSkew skew;
         TimeSeries skewSeries;
-        PtpMonitor ptp;
-        std::array<CounterState, 2> counters;
-        std::vector<Event> events;
+        CounterState counters;
     };
 
     double now() const { return clock_(); }
     void addEventLocked(const std::string& level, const std::string& text);
     void recordVideoFrame(Path path, const FrameTiming& timing);
     void recordAudioPeriod(Path path, const AudioTiming& timing);
-    void checkPtpLocked(double t);
     nlohmann::json videoSnapshot(const SnapshotData& d, double windowSec) const;
     nlohmann::json audioSnapshot(const SnapshotData& d, double windowSec) const;
     nlohmann::json countersJson(const StreamCounters& counters) const;
     nlohmann::json countersDelta(const StreamCounters& now, const StreamCounters& before) const;
     nlohmann::json profileToJson(const PacketProfile& profile) const;
+    nlohmann::json ratesJson(const CounterState& counters) const;
+    std::optional<Compliance> verdictLocked(Path path) const;
 
-    MonitorConfig config_;
+    FlowConfig config_;
+    EventSink sink_;
     Clock clock_;
-    std::chrono::system_clock::time_point startWall_;
     double startSec_;
     mutable std::mutex mutex_;
 
@@ -186,7 +173,6 @@ class Monitor {
     FrameCounters framesInterval_;
     FrameCounters framesTotal_;
     PathSkew videoSkew_;
-    std::array<VideoPacketAnalyzer::Histograms, kPathCount> videoHistInterval_;
     uint64_t videoPackets_ = 0;
     uint64_t videoSwPackets_ = 0;
 
@@ -196,12 +182,9 @@ class Monitor {
     uint64_t audioPackets_ = 0;
     uint64_t audioSwPackets_ = 0;
 
-    PtpMonitor ptp_;
-    PtpState lastPtpState_ = PtpState::NoSync;
-    bool ptpStateKnown_ = false;
-
-    std::array<CounterState, 2> counters_;
-    std::deque<Event> events_;
+    CounterState counters_;
 };
+
+nlohmann::json flowAddressToJson(const FlowAddress& address);
 
 } // namespace st2110

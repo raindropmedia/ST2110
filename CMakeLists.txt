@@ -20,10 +20,14 @@ add_library(st2110_core STATIC
     src/core/AudioPacketAnalyzer.cpp
     src/core/FrameRate.cpp
     src/core/Histogram.cpp
-    src/core/Monitor.cpp
+    src/core/FlowMonitor.cpp
+    src/core/FlowTable.cpp
+    src/core/MonitorHub.cpp
+    src/core/PacketParser.cpp
     src/core/Options.cpp
     src/core/PtpMonitor.cpp
     src/core/Report.cpp
+    src/core/SapDirectory.cpp
     src/core/Sdp.cpp
     src/core/SyntheticSender.cpp
     src/core/TimeSeries.cpp
@@ -45,6 +49,7 @@ endif()
 add_executable(st2110-monitor
     src/app/main.cpp
     src/demo/DemoSource.cpp
+    src/discovery/Discovery.cpp
     src/web/WebServer.cpp
 )
 target_link_libraries(st2110-monitor PRIVATE st2110_core httplib::httplib Threads::Threads)

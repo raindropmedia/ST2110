@@ -7,8 +7,11 @@
   const C = (name) => Charts.css(name);
 
   const state = {
-    tab: 'overview',
-    seg: { videoPath: 'P', profilePath: 'P', profileKind: 'last', audioPath: 'P', eventFilter: 'all' },
+    tab: 'flows',
+    flowId: '',
+    flowsData: null,
+    seg: { videoPath: 'P', profilePath: 'P', profileKind: 'last', audioPath: 'P', eventFilter: 'all',
+           eventScope: 'all', discKind: 'all' },
     window: 60,
     paused: false,
     logY: true,
@@ -61,13 +64,42 @@
   // ---------- Bedienung ----------
   $('tabs').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-tab]');
-    if (!btn) return;
-    state.tab = btn.dataset.tab;
-    document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b === btn));
-    document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.dataset.view === state.tab));
-    if (state.tab === 'events') { state.seenEvents = state.lastEventCount; $('eventBadge').textContent = ''; }
-    render();
+    if (!btn || btn.disabled) return;
+    showTab(btn.dataset.tab);
   });
+
+  function showTab(tab) {
+    state.tab = tab;
+    document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+    document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.dataset.view === tab));
+    if (tab === 'events') { state.seenEvents = state.lastEventCount; $('eventBadge').textContent = ''; }
+    if (tab === 'flows') pollFlows();
+    writeHash();
+    render();
+  }
+
+  function writeHash() {
+    const h = `#tab=${state.tab}${state.flowId ? '&flow=' + encodeURIComponent(state.flowId) : ''}`;
+    if (location.hash !== h) history.replaceState(null, '', h);
+  }
+
+  function readHash() {
+    const p = new URLSearchParams(location.hash.slice(1));
+    if (p.get('flow')) state.flowId = p.get('flow');
+    if (p.get('tab') && document.querySelector(`.view[data-view="${p.get('tab')}"]`)) state.tab = p.get('tab');
+  }
+
+  function selectFlow(id) {
+    if (id === state.flowId) return;
+    state.flowId = id;
+    state.prevCounters = null;
+    state.rates = { video: null, audio: null };
+    $('flowSelect').value = id;
+    writeHash();
+    poll(true);
+  }
+
+  $('flowSelect').addEventListener('change', (e) => selectFlow(e.target.value));
 
   document.querySelectorAll('[data-seg]').forEach(seg => {
     seg.addEventListener('click', (e) => {
@@ -105,9 +137,19 @@
     if ((state.paused && !force) || inflight) return;
     inflight = true;
     try {
-      const res = await fetch(`api/snapshot?window=${state.window}`, { cache: 'no-store' });
+      const res = await fetch(`api/snapshot?window=${state.window}&flow=${encodeURIComponent(state.flowId)}`,
+                              { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const snap = await res.json();
+      // Ansichten arbeiten mit dem gewählten Flow wie bisher mit s.video / s.audio / s.counters.
+      const f = snap.flow;
+      if (f && !state.flowId) { state.flowId = f.id; writeHash(); }
+      if (!f && state.flowId && snap.flows.length && !snap.flows.some(x => x.id === state.flowId)) {
+        state.flowId = snap.flows[0].id; // gewählter Flow wurde entfernt
+      }
+      snap.video = f && f.video ? f.video : null;
+      snap.audio = f && f.audio ? f.audio : null;
+      snap.counters = { video: f && f.kind === 'video' ? f.counters : null, audio: f && f.kind === 'audio' ? f.counters : null };
       updateRates(snap);
       state.snap = snap;
       $('banner').hidden = true;
@@ -133,8 +175,12 @@
         $('demoCtl').hidden = false;
       }
     } catch (_) { /* Abfrage meldet den Fehler */ }
+    readHash();
+    showTab(state.tab);
     poll(true);
+    pollFlows();
     setInterval(poll, 500);
+    setInterval(() => { if (state.tab === 'flows' && !state.paused) pollFlows(); }, 1000);
   }
 
   function updateRates(snap) {
@@ -164,7 +210,10 @@
     const s = state.snap;
     if (!s) return;
     renderHeader(s);
+    updateFlowSelect(s);
+    updateTabs(s);
     switch (state.tab) {
+      case 'flows': renderFlows(); break;
       case 'overview': renderOverview(s); break;
       case 'video': renderVideo(s); break;
       case 'profile': renderProfile(s); break;
@@ -179,12 +228,18 @@
   function renderHeader(s) {
     const parts = [];
     if (s.demo) parts.push('DEMO');
+    if (s.flow) parts.push(s.flow.label);
     if (s.video) parts.push(s.video.format);
     if (s.audio) parts.push(s.audio.format);
     parts.push(`Laufzeit ${fmtDuration(s.uptimeSec)}`);
     $('subtitle').textContent = parts.join(' · ');
 
     const chips = [];
+    const counts = { narrow: 0, wide: 0, failed: 0, none: 0 };
+    for (const f of s.flows) counts[worstVerdict(f) || 'none']++;
+    const flowsCls = counts.failed ? 'failed' : counts.wide ? 'wide' : counts.narrow ? 'narrow' : '';
+    chips.push(chip(flowsCls, 'Flows', `${s.flows.length}` + (counts.failed ? ` · ${counts.failed} failed` : '') +
+                                        (counts.wide ? ` · ${counts.wide} wide` : '')));
     if (s.video) for (const p of Object.keys(s.video.paths)) {
       const v = s.video.paths[p].verdict;
       chips.push(chip(v || '', `Video ${p}`, v ? verdictLabel[v] : '–'));
@@ -298,28 +353,40 @@
     const pass = videoPass(s);
     if (s.video) {
       const vp = s.video.paths;
-      const list = Object.keys(vp).map(p => ({ data: vp[p].series.cinstMax, color: pathColor(p), label: p, use: 'max' }));
-      Charts.series(charts.ovCinst, list, { window: state.window, markers: pass ? [
-        { y: pass.cinstMaxNarrow, label: 'narrow', color: C('--narrow') },
-        { y: pass.cinstMaxWide, label: 'wide', color: C('--wide'), include: false }] : [], yMin: 0 });
-      const vl = [];
+      $('ovCap1').textContent = 'Cinst max je Bild';
+      $('ovCap2').textContent = 'VRX je Bild (min/max)';
+      $('ovCap3').textContent = 'FPT und Latenz je Bild (µs)';
+      Charts.series(charts.ov1, Object.keys(vp).map(p => ({ data: vp[p].series.cinstMax, color: pathColor(p), label: p, use: 'max' })),
+        { window: state.window, yMin: 0, markers: pass ? [
+          { y: pass.cinstMaxNarrow, label: 'narrow', color: C('--narrow') },
+          { y: pass.cinstMaxWide, label: 'wide', color: C('--wide'), include: false }] : [] });
+      Charts.series(charts.ov2, Object.keys(vp).map(p => ({ data: mergeMinMax(vp[p].series.vrxMin, vp[p].series.vrxMax),
+                                                         color: pathColor(p), label: p, use: 'band' })),
+        { window: state.window, markers: pass ? [
+          { y: pass.vrxMaxNarrow, label: 'narrow', color: C('--narrow') }, { y: 0, label: '', color: C('--failed') }] : [] });
+      const fl = [];
       for (const p of Object.keys(vp)) {
-        vl.push({ data: mergeMinMax(vp[p].series.vrxMin, vp[p].series.vrxMax), color: pathColor(p), label: p, use: 'band' });
+        fl.push({ data: vp[p].series.fptUs, color: pathColor(p), label: `FPT ${p}`, use: 'max' });
       }
-      Charts.series(charts.ovVrx, vl, { window: state.window, markers: pass ? [
-        { y: pass.vrxMaxNarrow, label: 'narrow', color: C('--narrow') }, { y: 0, label: '', color: C('--failed') }] : [] });
-    } else { Charts.noData(charts.ovCinst, 'kein Video'); Charts.noData(charts.ovVrx, 'kein Video'); }
-    if (s.audio) {
+      fl.push({ data: vp.P.series.latencyUs, color: C('--wide'), label: 'Latenz P', use: 'max' });
+      Charts.series(charts.ov3, fl, { window: state.window, unit: 'µs',
+        markers: pass ? [{ y: pass.trOffsetNs / 1000, label: 'TR_OFFSET', color: C('--failed') }] : [] });
+    } else if (s.audio) {
       const ap = s.audio.paths;
-      const list = [];
-      for (const p of Object.keys(ap)) {
-        list.push({ data: ap[p].series.dpvrMaxUs, color: pathColor(p), label: `DPVR ${p}`, use: 'max' });
-        list.push({ data: ap[p].series.tsdfUs, color: p === 'R' ? '#f0abfc' : '#a5f3fc', label: `TSDF ${p}`, use: 'max' });
-      }
       const ps = s.audio.pass;
-      Charts.series(charts.ovAudio, list, { window: state.window, unit: 'µs', yMin: 0,
-        markers: ps ? [{ y: ps.tsdfMaxNarrowUs, label: 'TSDF narrow', color: C('--narrow'), include: false }] : [] });
-    } else Charts.noData(charts.ovAudio, 'kein Ton');
+      $('ovCap1').textContent = 'DPVR min/max je 200 ms (µs)';
+      $('ovCap2').textContent = 'TSDF je 200 ms (µs)';
+      $('ovCap3').textContent = 'IPT max je 200 ms (µs)';
+      Charts.series(charts.ov1, Object.keys(ap).map(p => ({ data: mergeMinMax(ap[p].series.dpvrMinUs, ap[p].series.dpvrMaxUs),
+                                                         color: pathColor(p), label: p, use: 'band' })),
+        { window: state.window, unit: 'µs', markers: ps ? [{ y: ps.dpvrMaxNarrowUs, label: 'narrow', color: C('--narrow'), include: false }] : [] });
+      Charts.series(charts.ov2, Object.keys(ap).map(p => ({ data: ap[p].series.tsdfUs, color: pathColor(p), label: p, use: 'max' })),
+        { window: state.window, unit: 'µs', yMin: 0, markers: ps ? [{ y: ps.tsdfMaxNarrowUs, label: 'narrow', color: C('--narrow') }] : [] });
+      Charts.series(charts.ov3, Object.keys(ap).map(p => ({ data: ap[p].series.iptMaxNs, color: pathColor(p), label: p, use: 'max' })),
+        { window: state.window, unit: 'µs', scale: 1e-3, markers: [{ y: s.audio.packetTimeUs, label: 'Paketzeit', color: C('--ideal') }] });
+    } else {
+      for (const k of ['ov1', 'ov2', 'ov3']) Charts.noData(charts[k], 'kein Flow gewählt');
+    }
     Charts.series(charts.ovPtp, [{ data: s.ptp.series, color: C('--accent'), label: 'Korrektur', use: 'max' }],
       { window: state.window, unit: 'ns', markers: [{ y: 0, color: C('--ideal'), label: '' }] });
   }
@@ -588,13 +655,222 @@
   // ---------- Ereignisse ----------
   function renderEvents(s) {
     const f = state.seg.eventFilter;
-    const list = (s.events || []).filter(e => f === 'all' || (f === 'warn' ? e.level !== 'info' : e.level === 'error'));
+    const scope = state.seg.eventScope;
+    const list = (s.events || []).filter(e => (f === 'all' || (f === 'warn' ? e.level !== 'info' : e.level === 'error')) &&
+                                              (scope === 'all' || e.flow === state.flowId));
     const label = { info: 'Info', warn: 'Warnung', error: 'Fehler' };
     $('eventTable').innerHTML = list.length
       ? list.map(e => `<tr><td class="time">${esc(e.time.replace('T', ' ').replace('Z', ''))}</td>` +
           `<td class="level"><span class="lvl ${esc(e.level)}">${label[e.level] || esc(e.level)}</span></td><td>${esc(e.text)}</td></tr>`).join('')
       : '<tr><td class="empty">keine Ereignisse</td></tr>';
   }
+
+  // ---------- Flows ----------
+  const kindLabel = { video: 'Video', audio: 'Ton', anc: 'Zusatzdaten', ptp: 'PTP', sap: 'SAP', rtp: 'RTP', udp: 'UDP' };
+  const order = { failed: 3, wide: 2, narrow: 1 };
+
+  function worstVerdict(f) {
+    let worst = null;
+    for (const v of Object.values(f.verdict || {})) {
+      if (v && (!worst || order[v] > order[worst])) worst = v;
+    }
+    return worst;
+  }
+
+  function mbit(bps) { return bps === null || bps === undefined ? '–' : fmt(bps / 1e6, bps >= 1e8 ? 0 : 1); }
+
+  function updateFlowSelect(s) {
+    const sel = $('flowSelect');
+    const key = s.flows.map(f => f.id + f.label).join('|');
+    if (sel.dataset.key !== key) {
+      sel.innerHTML = s.flows.length
+        ? s.flows.map(f => `<option value="${esc(f.id)}">${esc(f.label)} · ${esc(f.format)}</option>`).join('')
+        : '<option value="">keine Flows</option>';
+      sel.dataset.key = key;
+    }
+    sel.value = state.flowId;
+  }
+
+  function updateTabs(s) {
+    const kind = s.flow ? s.flow.kind : null;
+    const allowed = {
+      flows: true, ptp: true, events: true,
+      overview: !!kind, counters: !!kind, redundancy: !!kind,
+      video: kind === 'video', profile: kind === 'video', audio: kind === 'audio',
+    };
+    document.querySelectorAll('#tabs button[data-tab]').forEach(b => {
+      b.disabled = !allowed[b.dataset.tab];
+      b.title = b.disabled ? (kind ? 'passt nicht zum gewählten Flow' : 'kein Flow gewählt') : '';
+    });
+    if (!allowed[state.tab]) showTab(kind ? 'overview' : 'flows');
+  }
+
+  async function pollFlows() {
+    try {
+      const res = await fetch('api/flows', { cache: 'no-store' });
+      if (!res.ok) return;
+      state.flowsData = await res.json();
+      if (state.tab === 'flows') renderFlows();
+    } catch (_) { /* Abfrage des Snapshots meldet Verbindungsfehler */ }
+  }
+
+  function addrText(a) { return a ? `${a.ip}:${a.udpPort}` : '–'; }
+
+  function renderFlows() {
+    const d = state.flowsData;
+    if (!d) return;
+    // Überwachte Flows
+    const m = d.monitored;
+    $('monitoredInfo').textContent = `${m.length} von höchstens ${d.maxFlows}`;
+    $('monitoredTable').innerHTML = `<tr><th></th><th>Name</th><th>Art</th><th>Format</th><th>Ziel P</th>
+      <th>Ziel R</th><th>PT</th><th>Mbit/s P / R</th><th>Pakete/s</th><th>Verlust</th><th>Urteil P / R</th><th></th></tr>` +
+      (m.length ? m.map(f => {
+        const w = worstVerdict(f);
+        const rp = f.rates.P, rr = f.rates.R;
+        const v = (p) => f.verdict[p] ? `<span class="verdict ${f.verdict[p]}">${f.verdict[p]}</span>` : '–';
+        return `<tr class="${f.id === state.flowId ? 'selected' : ''}" data-id="${esc(f.id)}">
+          <td><span class="dot ${esc(w || '')}"></span></td><td>${esc(f.label)}</td>
+          <td><span class="tag ${f.kind}">${kindLabel[f.kind]}</span></td><td class="mono">${esc(f.format)}</td>
+          <td class="mono">${esc(addrText(f.flows.P))}${f.flows.P.sourceIp ? `<span class="sub">Quelle ${esc(f.flows.P.sourceIp)}</span>` : ''}</td>
+          <td class="mono">${esc(addrText(f.flows.R))}</td><td class="num">${f.payloadType}</td>
+          <td class="num">${rp ? mbit(rp.bps) : '–'}${f.flows.R ? ' / ' + (rr ? mbit(rr.bps) : '–') : ''}</td>
+          <td class="num">${rp ? fmt(rp.pps, 0) : '–'}</td><td class="num">${f.lost === null ? '–' : fmt(f.lost, 0)}</td>
+          <td>${v('P')}${f.flows.R ? ' / ' + v('R') : ''}</td>
+          <td class="actions"><button class="btn small" data-action="select" data-id="${esc(f.id)}">Anzeigen</button>
+              <button class="btn small danger" data-action="remove" data-id="${esc(f.id)}">Entfernen</button></td></tr>`;
+      }).join('') : '<tr><td colspan="12" class="empty">Noch kein Flow überwacht – aus der Erkennung übernehmen oder „Flow hinzufügen“.</td></tr>');
+
+    // Erkennung
+    const st = d.discovery || {};
+    let info = st.interface ? `Schnittstelle ${st.interface}` : 'aus (--discover <schnittstelle>)';
+    if (st.frames !== undefined) info += ` · ${fmt(st.frames, 0)} Rahmen`;
+    if (st.drops) info += ` · ${fmt(st.drops, 0)} beim Mitlesen verworfen (Sequenzfehler können daher stammen)`;
+    if (st.error) info += ` · ${st.error}`;
+    $('discoveryInfo').textContent = info;
+    const k = state.seg.discKind;
+    const list = d.discovered.filter(f => k === 'all' || (k === 'other' ? !['video', 'audio'].includes(f.kind) : f.kind === k));
+    $('discoveredTable').innerHTML = `<tr><th></th><th>Ziel</th><th>Quelle</th><th>Art</th><th>Format (geschätzt)</th><th>PT</th>
+      <th>SSRC</th><th>Mbit/s</th><th>Pakete/s</th><th>Seq.-Fehler</th><th>DSCP</th><th>VLAN</th><th></th></tr>` +
+      (list.length ? list.map((f, i) => {
+        const can = (f.kind === 'video' || f.kind === 'audio') && !f.monitored;
+        const status = f.monitored ? `<span class="tag on">überwacht</span>` :
+          `<button class="btn small" data-action="monitor" data-index="${d.discovered.indexOf(f)}" ${can ? '' : 'disabled title="Art wird nicht unterstützt"'}>Überwachen</button>`;
+        return `<tr class="${f.active ? '' : 'inactive'}"><td><span class="dot ${f.active ? 'ok' : ''}"></span></td>
+          <td class="mono">${esc(f.dstIp)}:${f.dstPort}</td><td class="mono">${esc(f.srcIp)}:${f.srcPort}</td>
+          <td><span class="tag ${f.kind}">${kindLabel[f.kind] || f.kind}</span></td><td class="mono">${esc(f.format || '–')}</td>
+          <td class="num">${f.payloadType ?? '–'}</td><td class="mono">${f.ssrc !== null ? '0x' + f.ssrc.toString(16).padStart(8, '0') : '–'}</td>
+          <td class="num">${mbit(f.bps)}</td><td class="num">${fmt(f.pps, 0)}</td>
+          <td class="num">${fmt(f.sequenceErrors, 0)}</td><td class="num">${f.dscp}</td><td class="num">${f.vlan ?? '–'}</td>
+          <td class="actions">${status}${f.monitored && f.monitored !== state.flowId ? ` <button class="btn small" data-action="select" data-id="${esc(f.monitored)}">Anzeigen</button>` : ''}</td></tr>`;
+      }).join('') : `<tr><td colspan="13" class="empty">${st.interface ? 'noch keine Pakete' : 'Erkennung nicht aktiv'}</td></tr>`);
+
+    // SAP
+    const a = d.announced;
+    $('announcedTable').innerHTML = `<tr><th>Name</th><th>Quelle</th><th>Medien</th><th>zuletzt</th><th></th></tr>` +
+      (a.length ? a.map(e => {
+        const media = e.media.map(x => `<span class="tag ${x.kind}">${kindLabel[x.kind]}</span> ${esc(x.format)} · ${esc(x.address)}${x.redundant ? ' (+R)' : ''}${x.monitored ? ' <span class="tag on">überwacht</span>' : ''}`).join('<br>');
+        const all = e.media.length && e.media.every(x => x.monitored);
+        return `<tr><td>${esc(e.name || '–')}</td><td class="mono">${esc(e.origin)}</td><td>${media || esc(e.errors.join('; '))}</td>
+          <td class="num">vor ${fmt(e.lastSeenSec, 0)} s</td>
+          <td><button class="btn small" data-action="sap" data-key="${esc(e.key)}" ${all || !e.media.length ? 'disabled' : ''}>Überwachen</button></td></tr>`;
+      }).join('') : '<tr><td colspan="5" class="empty">keine Ankündigungen</td></tr>');
+  }
+
+  async function postFlow(body) {
+    const msg = $('addFlowMsg');
+    try {
+      const res = await fetch('api/flows', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const r = await res.json();
+      msg.hidden = false;
+      msg.className = 'msg' + (res.ok ? '' : ' error');
+      const parts = [];
+      if (r.ids && r.ids.length) parts.push(`Überwacht: ${r.ids.join(', ')}`);
+      if (r.errors && r.errors.length) parts.push(...r.errors);
+      if (r.error) parts.push(r.error);
+      msg.textContent = parts.join('\n');
+      if (r.ids && r.ids.length) selectFlow(r.ids[0]);
+      pollFlows();
+      return res.ok;
+    } catch (err) {
+      msg.hidden = false;
+      msg.className = 'msg error';
+      msg.textContent = 'Fehler: ' + err.message;
+      return false;
+    }
+  }
+
+  function openForm(prefill) {
+    const form = $('addFlowForm');
+    $('addFlowCard').hidden = false;
+    $('addFlowMsg').hidden = true;
+    if (prefill) {
+      for (const [k, v] of Object.entries(prefill)) if (form.elements[k] && v !== undefined && v !== null) form.elements[k].value = v;
+    }
+    updateFormKind();
+    $('addFlowCard').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function updateFormKind() {
+    const form = $('addFlowForm');
+    const kind = form.elements.kind.value;
+    form.querySelectorAll('[data-kind]').forEach(el => { el.hidden = el.dataset.kind !== kind; });
+  }
+
+  $('addFlowBtn').addEventListener('click', () => openForm());
+  $('addFlowClose').addEventListener('click', () => { $('addFlowCard').hidden = true; });
+  $('addFlowForm').elements.kind.addEventListener('change', (e) => {
+    $('addFlowForm').elements.pt.value = e.target.value === 'video' ? 96 : 97;
+    updateFormKind();
+  });
+  $('addFlowForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const f = e.target.elements;
+    const kind = f.kind.value;
+    const spec = [f.address.value.trim()];
+    if (f.red.value.trim()) spec.push('red=' + f.red.value.trim());
+    if (f.source.value.trim()) spec.push('source=' + f.source.value.trim());
+    if (f.redSource.value.trim()) spec.push('red-source=' + f.redSource.value.trim());
+    if (kind === 'video') spec.push('format=' + f.videoFormat.value.trim());
+    else { spec.push('format=' + f.audioFormat.value.trim()); spec.push('ptime=' + f.ptime.value); }
+    if (f.pt.value) spec.push('pt=' + f.pt.value);
+    if (f.name.value.trim()) spec.push('name=' + f.name.value.trim().replace(/,/g, ' '));
+    postFlow({ kind, spec: spec.join(',') });
+  });
+  $('sdpSubmit').addEventListener('click', () => {
+    const sdp = $('sdpText').value.trim();
+    if (sdp) postFlow({ sdp });
+  });
+
+  // Aktionen in den Tabellen
+  document.querySelector('[data-view="flows"]').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn || btn.disabled) return;
+    const action = btn.dataset.action;
+    if (action === 'select') {
+      selectFlow(btn.dataset.id);
+      showTab('overview');
+    } else if (action === 'remove') {
+      if (!confirm('Flow ' + btn.dataset.id + ' nicht mehr überwachen?')) return;
+      await fetch('api/flows/' + encodeURIComponent(btn.dataset.id), { method: 'DELETE' });
+      if (state.flowId === btn.dataset.id) state.flowId = '';
+      pollFlows();
+      poll(true);
+    } else if (action === 'monitor') {
+      const f = state.flowsData.discovered[+btn.dataset.index];
+      if (!f) return;
+      const prefill = { kind: f.kind, address: `${f.dstIp}:${f.dstPort}`, source: f.multicast ? f.srcIp : '',
+                        name: `${f.kind === 'video' ? 'Video' : 'Ton'} ${f.dstIp}`, pt: f.payloadType, red: '', redSource: '' };
+      if (f.kind === 'video' && f.format) prefill.videoFormat = f.format;
+      if (f.kind === 'audio' && f.format) {
+        const [enc, pt] = f.format.split(' ');
+        prefill.audioFormat = enc;
+        prefill.ptime = { '125us': '0.125', '250us': '0.25', '333us': '0.333', '1ms': '1', '4ms': '4' }[pt] || '1';
+      }
+      openForm(prefill);
+    } else if (action === 'sap') {
+      postFlow({ sap: btn.dataset.key });
+    }
+  });
 
   init();
 })();

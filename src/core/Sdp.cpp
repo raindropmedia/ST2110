@@ -251,6 +251,13 @@ std::optional<SdpVideo> sdpVideo(const SdpSession& session, std::string& error) 
     if (p == nullptr) {
         return std::nullopt;
     }
+    return sdpVideoFrom(*p, r, error);
+}
+
+std::optional<SdpVideo> sdpVideoFrom(const SdpMedia& media, const SdpMedia* redundantMedia,
+                                     std::string& error) {
+    const SdpMedia* p = &media;
+    const SdpMedia* r = redundantMedia;
     SdpVideo v;
     v.primary = toFlow(*p);
     if (r != nullptr) {
@@ -306,6 +313,13 @@ std::optional<SdpAudio> sdpAudio(const SdpSession& session, std::string& error) 
     if (p == nullptr) {
         return std::nullopt;
     }
+    return sdpAudioFrom(*p, r, error);
+}
+
+std::optional<SdpAudio> sdpAudioFrom(const SdpMedia& media, const SdpMedia* redundantMedia,
+                                     std::string& error) {
+    const SdpMedia* p = &media;
+    const SdpMedia* r = redundantMedia;
     SdpAudio a;
     a.primary = toFlow(*p);
     if (r != nullptr) {
@@ -335,6 +349,36 @@ std::optional<SdpAudio> sdpAudio(const SdpSession& session, std::string& error) 
         return std::nullopt;
     }
     return a;
+}
+
+std::vector<std::pair<const SdpMedia*, const SdpMedia*>> sdpMediaPairs(const SdpSession& session) {
+    std::vector<std::pair<const SdpMedia*, const SdpMedia*>> out;
+    std::vector<const SdpMedia*> secondary;
+    for (const auto& group : session.dupGroups) {
+        if (group.size() >= 2) {
+            const SdpMedia* a = findByMid(session, group[0]);
+            const SdpMedia* b = findByMid(session, group[1]);
+            if (a != nullptr && b != nullptr && a->type == b->type) {
+                secondary.push_back(b);
+            }
+        }
+    }
+    for (const auto& m : session.media) {
+        if (std::find(secondary.begin(), secondary.end(), &m) != secondary.end()) {
+            continue;
+        }
+        const SdpMedia* partner = nullptr;
+        for (const auto& group : session.dupGroups) {
+            if (group.size() >= 2 && !m.mid.empty() && group[0] == m.mid) {
+                const SdpMedia* b = findByMid(session, group[1]);
+                if (b != nullptr && b->type == m.type) {
+                    partner = b;
+                }
+            }
+        }
+        out.emplace_back(&m, partner);
+    }
+    return out;
 }
 
 } // namespace st2110

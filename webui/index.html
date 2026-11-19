@@ -17,6 +17,9 @@
     </div>
     <div class="chips" id="chips" aria-live="polite"></div>
     <div class="controls">
+      <label class="ctl">Flow
+        <select id="flowSelect"><option value="">–</option></select>
+      </label>
       <label class="ctl" id="demoCtl" hidden>Störung
         <select id="demoPreset"></select>
       </label>
@@ -36,7 +39,8 @@
 
   <div class="layout">
     <nav class="tabs" id="tabs" aria-label="Ansichten">
-      <button data-tab="overview" class="active">Übersicht</button>
+      <button data-tab="flows" class="active">Flows</button>
+      <button data-tab="overview">Übersicht</button>
       <button data-tab="video">Video ST 2110-21</button>
       <button data-tab="profile">Paketprofil</button>
       <button data-tab="audio">Ton ST 2110-30</button>
@@ -49,13 +53,71 @@
     <main id="main">
       <div class="banner" id="banner" hidden></div>
 
+      <!-- Flows -->
+      <section data-view="flows" class="view active">
+        <div class="card">
+          <div class="card-head">
+            <h3>Überwachte Flows <span class="hint" id="monitoredInfo"></span></h3>
+            <button id="addFlowBtn" type="button" class="btn">Flow hinzufügen</button>
+          </div>
+          <div class="table-scroll"><table class="flows" id="monitoredTable"></table></div>
+        </div>
+
+        <div class="card" id="addFlowCard" hidden>
+          <div class="card-head"><h3>Flow hinzufügen</h3><button id="addFlowClose" type="button" class="btn">Schließen</button></div>
+          <form id="addFlowForm" class="form-grid" autocomplete="off">
+            <label>Art
+              <select name="kind"><option value="video">Video ST 2110-20</option><option value="audio">Ton ST 2110-30</option></select>
+            </label>
+            <label>Name <input name="name" placeholder="z. B. Kamera 4"></label>
+            <label>Adresse P <input name="address" required placeholder="239.100.0.1:20000"></label>
+            <label>Quelle P (SSM) <input name="source" placeholder="optional"></label>
+            <label>Adresse R (ST 2022-7) <input name="red" placeholder="optional"></label>
+            <label>Quelle R <input name="redSource" placeholder="optional"></label>
+            <label data-kind="video">Format <input name="videoFormat" list="videoFormats" value="1920x1080p50"></label>
+            <label data-kind="audio" hidden>Kodierung <input name="audioFormat" list="audioFormats" value="L24/48000/2"></label>
+            <label data-kind="audio" hidden>Paketzeit
+              <select name="ptime"><option value="0.125">125 µs</option><option value="0.25">250 µs</option><option value="0.333">333 µs</option><option value="1" selected>1 ms</option><option value="4">4 ms</option></select>
+            </label>
+            <label>Payload-Typ <input name="pt" type="number" min="0" max="127" value="96"></label>
+            <div class="form-actions"><button type="submit" class="btn primary">Überwachen</button></div>
+          </form>
+          <details class="sdp-box">
+            <summary>… oder SDP einfügen</summary>
+            <textarea id="sdpText" rows="8" placeholder="v=0&#10;o=- …&#10;s=Kamera 1&#10;m=video 20000 RTP/AVP 96 …"></textarea>
+            <button id="sdpSubmit" type="button" class="btn primary">Alle Medien der SDP überwachen</button>
+          </details>
+          <div class="msg" id="addFlowMsg" hidden></div>
+          <datalist id="videoFormats">
+            <option value="1920x1080p50"><option value="1920x1080i50"><option value="1920x1080p59.94"><option value="1920x1080i59.94">
+            <option value="1280x720p50"><option value="1280x720p59.94"><option value="3840x2160p50"><option value="3840x2160p59.94">
+          </datalist>
+          <datalist id="audioFormats">
+            <option value="L24/48000/2"><option value="L24/48000/8"><option value="L24/48000/16"><option value="L16/48000/2"><option value="L24/96000/2">
+          </datalist>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>Im Netz erkannt <span class="hint" id="discoveryInfo"></span></h3>
+            <div class="seg" data-seg="discKind"><button data-v="all" class="active">Alle</button><button data-v="video">Video</button><button data-v="audio">Ton</button><button data-v="other">Sonstige</button></div>
+          </div>
+          <div class="table-scroll"><table class="flows" id="discoveredTable"></table></div>
+        </div>
+
+        <div class="card">
+          <h3>Per SAP angekündigt</h3>
+          <div class="table-scroll"><table class="flows" id="announcedTable"></table></div>
+        </div>
+      </section>
+
       <!-- Übersicht -->
-      <section data-view="overview" class="view active">
+      <section data-view="overview" class="view">
         <div class="tiles" id="overviewTiles"></div>
         <div class="grid two">
-          <figure class="card"><figcaption>Cinst max je Bild</figcaption><canvas data-chart="ovCinst"></canvas></figure>
-          <figure class="card"><figcaption>VRX je Bild (min/max)</figcaption><canvas data-chart="ovVrx"></canvas></figure>
-          <figure class="card"><figcaption>Ton: DPVR max und TSDF je 200 ms (µs)</figcaption><canvas data-chart="ovAudio"></canvas></figure>
+          <figure class="card"><figcaption id="ovCap1">–</figcaption><canvas data-chart="ov1"></canvas></figure>
+          <figure class="card"><figcaption id="ovCap2">–</figcaption><canvas data-chart="ov2"></canvas></figure>
+          <figure class="card"><figcaption id="ovCap3">–</figcaption><canvas data-chart="ov3"></canvas></figure>
           <figure class="card"><figcaption>PTP-Korrektur je Sync (ns)</figcaption><canvas data-chart="ovPtp"></canvas></figure>
         </div>
       </section>
@@ -155,6 +217,7 @@
       <section data-view="events" class="view">
         <div class="toolbar">
           <div class="seg" data-seg="eventFilter"><button data-v="all" class="active">Alle</button><button data-v="warn">Warnungen und Fehler</button><button data-v="error">Nur Fehler</button></div>
+          <div class="seg" data-seg="eventScope"><button data-v="all" class="active">Alle Flows</button><button data-v="flow">Nur gewählter Flow</button></div>
         </div>
         <div class="card"><table class="events" id="eventTable"></table></div>
       </section>

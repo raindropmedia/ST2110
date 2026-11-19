@@ -56,7 +56,7 @@ VF (PF im Kernel mit `ptp4l`, VF mit Hardware-Zeitstempeln) gleichwertig misst, 
 ```bash
 cmake --preset release && cmake --build --preset release
 sudo ./build/release/st2110-monitor --port 0000:af:00.0 --local-ip 192.168.100.10 \
-     --video 239.100.0.1:20000 --video-format 1920x1080p50 --duration 60 \
+     --video 239.100.0.1:20000,format=1920x1080p50,name=Testsender --duration 60 \
      --http 0.0.0.0:8090 --output config/local/messung.jsonl
 ```
 

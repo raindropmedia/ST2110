@@ -14,7 +14,8 @@ Einsatz: Studio und Lehre an der HSD; Vorarbeit für ST 2110 im Studio-Gateway (
 ## Aktueller Stand
 
 Branch `tests/initial-setup`. `st2110-monitor` mit Demo, Web-Oberfläche, Video/Ton/PTP/2022-7-Auswertung
-und SDP-Import läuft und ist getestet (doctest, Playwright-Screenshots der Oberfläche). Der MTL-Pfad
+für mehrere Flows (zur Laufzeit änderbar), Flow-Erkennung (AF_PACKET, SAP) und SDP-Import läuft und ist
+getestet (doctest, Playwright-Screenshots der Oberfläche, Erkennung auf `lo` mit echten Paketen). Der MTL-Pfad
 (`src/mtl/MtlSource.cpp`) kompiliert und linkt gegen MTL v26.09 mit Patch, ist aber nicht auf Hardware
 gelaufen. Referenzkarte E830-XXVDA2 (`8086:12d3`), noch nicht geliefert.
 
@@ -31,6 +32,7 @@ gelaufen. Referenzkarte E830-XXVDA2 (`8086:12d3`), noch nicht geliefert.
 ```bash
 cmake --preset dev && cmake --build --preset dev && ctest --preset dev
 ./build/dev/st2110-monitor --demo --output -            # Oberfläche: http://127.0.0.1:8090/
+sudo ./build/dev/st2110-monitor --discover lo --output -  # reiner Netz-Scanner (ohne MTL)
 shellcheck scripts/*.sh
 clang-format --dry-run --Werror src/*/*.cpp src/*/*.h tests/*.cpp
 ```
@@ -47,9 +49,10 @@ horizontales Scrollen.
 
 | Pfad | Inhalt |
 | --- | --- |
-| `src/core/` | Ohne MTL: `Options`, `Sdp`, `FrameRate`, `AudioFormat`, `VideoTimingModel` (Grenzwerte und Urteil wie MTL), `VideoPacketAnalyzer`, `AudioPacketAnalyzer`, `PtpMonitor`/`PathSkew`, `Histogram`, `TimeSeries`, `TimingStats`, `Monitor` (führt alles zusammen, threadsicher), `Report`, `SyntheticSender` |
-| `src/mtl/` | `MtlSource`: MTL-Instanz, `st20_rx`/`st30_rx` mit Timing-Parser, Paket-Rückruf, PTP, Zähler |
-| `src/demo/` | `DemoSource`: synthetische Ströme mit umschaltbaren Störungen |
+| `src/core/` | Ohne MTL: `Options` (Flows als `FlowConfig`), `Sdp`, `FrameRate`, `AudioFormat`, `VideoTimingModel` (Grenzwerte und Urteil wie MTL), `VideoPacketAnalyzer`, `AudioPacketAnalyzer`, `PtpMonitor`/`PathSkew`, `Histogram`, `TimeSeries`, `TimingStats`, `FlowMonitor` (ein Flow, threadsicher), `MonitorHub` (alle Flows, PTP, Ereignisse, Erkennung), `FlowController` (Flows zur Laufzeit), `PacketParser`, `FlowTable` (erkannte Flows, Formatschätzung), `SapDirectory`, `Report`, `SyntheticSender` |
+| `src/mtl/` | `MtlSource`: MTL-Instanz, je Flow `st20_rx`/`st30_rx` mit Timing-Parser, Paket-Rückruf, PTP, Zähler |
+| `src/discovery/` | `Discovery`: AF_PACKET-Mitschnitt und SAP-Empfang auf einer Kernel-Schnittstelle (nur Linux) |
+| `src/demo/` | `DemoSource`: synthetische Flows mit umschaltbaren Störungen, simulierte Erkennung und SAP |
 | `src/web/` | `WebServer`: statische Dateien und JSON-API |
 | `src/app/` | `main.cpp` von `st2110-monitor` |
 | `webui/` | Oberfläche (`index.html`, `style.css`, `charts.js`, `app.js`) |
@@ -75,8 +78,10 @@ horizontales Scrollen.
   übereinstimmen. Abweichungen nur begründet und in `docs/MESSUNGEN.md` festhalten (Beispiel: ganzzahlige
   Zeitdifferenzen statt `double`).
 - Zeitstempel als `uint64_t` ns (TAI); absolute Zeiten in `long double`, Differenzen ganzzahlig.
-- Rückrufe aus MTL laufen im Datenpfad: nichts blockieren, `Monitor` nur kurz sperren. Teure Arbeit
-  (JSON) außerhalb der Sperre (`Monitor::snapshot` kopiert erst).
+- Rückrufe aus MTL laufen im Datenpfad: nichts blockieren, `FlowMonitor` nur kurz sperren. Teure Arbeit
+  (JSON) außerhalb der Sperre (`FlowMonitor::snapshot` kopiert erst).
+- Sperrreihenfolge: Flow vor Hub (Ereignisse eines Flows gehen an den Hub). Der Hub ruft Flows nie unter
+  seiner eigenen Sperre auf; Quellen (`MtlSource`, `DemoSource`) rufen `MonitorHub::addFlow` ohne eigene Sperre.
 - MTL lässt nur eine Instanz je Prozess sinnvoll zu (Einstellungen der Karte gelten prozessweit).
 
 **MTL-Patch**
@@ -87,7 +92,9 @@ horizontales Scrollen.
 
 **Web-Oberfläche**
 - Keine externen Skripte oder Schriften (Messnetz ohne Internet). Texte deutsch, Zahlen mit `de-DE`.
-- Neue Werte zuerst in `Monitor::snapshot()` (Test in `tests/test_monitor.cpp`), dann in `webui/app.js`.
+- Neue Werte zuerst in `FlowMonitor::snapshot()` bzw. `MonitorHub` (Test in `tests/test_monitor.cpp`), dann in
+  `webui/app.js`. Die Ansichten lesen `s.video`/`s.audio`/`s.counters` des gewählten Flows (in `poll()` aus
+  `snapshot.flow` abgeleitet).
 - Jeder neue Endpunkt im Kommentar von `WebServer.h` und in der README-Tabelle.
 
 **Messen**
@@ -107,5 +114,7 @@ horizontales Scrollen.
 - Erste Messung auf Hardware, Abgleich mit EBU LIST (Prüffragen in `docs/MESSUNGEN.md`).
 - PF- gegen VF-Betrieb (MTL bevorzugt VFs, das eingebaute PTP braucht die PF).
 - MTL liefert keine Grandmaster-Kennung, Domäne oder Pfadverzögerung; dafür ggf. `pmc` (linuxptp) im VF-Betrieb.
-- ST 2110-40 (Zusatzdaten), ST 2110-22, NMOS und pcap-Mitschnitt fehlen.
+- ST 2110-40 (Zusatzdaten), ST 2110-22, NMOS und pcap-Mitschnitt fehlen; die Erkennung meldet -40 nur als
+  „Zusatzdaten“.
+- Erkennung an einem echten Spiegelport mit mehreren Video-Flows prüfen (Rahmenverluste beim Mitlesen).
 - Web-Oberfläche ohne Anmeldung.

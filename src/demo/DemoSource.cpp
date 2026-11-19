@@ -1,19 +1,114 @@
 #include "demo/DemoSource.h"
 
+#include <algorithm>
+#include <arpa/inet.h>
 #include <chrono>
 #include <cmath>
 #include <random>
+#include <sstream>
 
 namespace st2110 {
 namespace {
 
 // TAI liegt 37 s vor UTC (Stand 2017, unverändert).
 constexpr uint64_t kTaiOffsetNs = 37ULL * 1'000'000'000ULL;
+constexpr uint32_t kSenderIp = (10u << 24) | (10u << 16) | 1; // 10.10.0.1
 
 uint64_t taiNowNs() {
     const auto now = std::chrono::system_clock::now().time_since_epoch();
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(now).count()) +
            kTaiOffsetNs;
+}
+
+uint32_t ipOf(const std::string& text) {
+    in_addr addr{};
+    inet_pton(AF_INET, text.c_str(), &addr);
+    return ntohl(addr.s_addr);
+}
+
+double epochNs(const FlowConfig& c) {
+    return c.video ? framePeriodNs(c.video->format.rate) : packetTimeNs(c.audio->format.ptime);
+}
+
+FlowConfig spec(Media media, const std::string& text) {
+    FlowConfig f;
+    std::string error;
+    parseFlowSpec(media, text, f, error);
+    return f;
+}
+
+const char* ptimeMs(PacketTime p) {
+    switch (p) {
+    case PacketTime::P125us:
+        return "0.125";
+    case PacketTime::P250us:
+        return "0.25";
+    case PacketTime::P333us:
+        return "0.333";
+    case PacketTime::P4ms:
+        return "4";
+    case PacketTime::P1ms:
+        break;
+    }
+    return "1";
+}
+
+std::string exactRate(const VideoFormat& f) {
+    // SDP nennt die Bildrate; bei Zeilensprung ist das die halbe Halbbildrate.
+    FrameRate r = f.rate;
+    if (f.interlaced) {
+        r = f.rate == FrameRate::P50      ? FrameRate::P25
+            : f.rate == FrameRate::P59_94 ? FrameRate::P29_97
+                                          : FrameRate::P30;
+    }
+    switch (r) {
+    case FrameRate::P59_94:
+        return "60000/1001";
+    case FrameRate::P29_97:
+        return "30000/1001";
+    case FrameRate::P23_98:
+        return "24000/1001";
+    case FrameRate::P119_88:
+        return "120000/1001";
+    default:
+        return frameRateName(r);
+    }
+}
+
+// Einfache SDP nach ST 2110-20/-30 für die simulierten SAP-Ankündigungen.
+std::string sdpFor(const std::string& name, const std::vector<FlowConfig>& flows) {
+    std::ostringstream s;
+    s << "v=0\r\no=- 1 1 IN IP4 10.10.0.1\r\ns=" << name << "\r\nt=0 0\r\n";
+    int mid = 0;
+    for (const auto& f : flows) {
+        const int first = ++mid;
+        const int second = f.redundant() ? ++mid : 0;
+        if (second != 0) {
+            s << "a=group:DUP m" << first << " m" << second << "\r\n";
+        }
+        for (int path = 0; path < (second != 0 ? 2 : 1); ++path) {
+            const FlowAddress& a = path == 0 ? f.primary() : *f.redundant();
+            const int pt = f.payloadType();
+            s << "m=" << (f.video ? "video " : "audio ") << a.udpPort << " RTP/AVP " << pt << "\r\n";
+            s << "c=IN IP4 " << a.ip << "/64\r\n";
+            s << "a=source-filter: incl IN IP4 " << a.ip << " 10.10.0.1\r\n";
+            if (f.video) {
+                const auto& v = f.video->format;
+                s << "a=rtpmap:" << pt << " raw/90000\r\n";
+                s << "a=fmtp:" << pt << " sampling=YCbCr-4:2:2; width=" << v.width << "; height=" << v.height
+                  << "; exactframerate=" << exactRate(v)
+                  << "; depth=10; TCS=SDR; colorimetry=BT709; PM=2110GPM; "
+                  << "SSN=ST2110-20:2017; TP=2110TPN" << (v.interlaced ? "; interlace" : "") << "\r\n";
+            } else {
+                const auto& af = f.audio->format;
+                s << "a=rtpmap:" << pt << " L" << static_cast<int>(af.bitDepth) << "/" << af.sampleRate << "/"
+                  << af.channels << "\r\n";
+                s << "a=ptime:" << ptimeMs(af.ptime) << "\r\n";
+            }
+            s << "a=mid:m" << (path == 0 ? first : second) << "\r\n";
+        }
+    }
+    return s.str();
 }
 
 } // namespace
@@ -32,20 +127,44 @@ const std::vector<DemoSource::Preset>& DemoSource::presets() {
     return kPresets;
 }
 
-DemoSource::DemoSource(const Options& options, Monitor& monitor)
-    : options_(options), monitor_(monitor),
-      videoP_(options.video ? options.video->format : VideoFormat{},
-              options.audio ? options.audio->format : AudioFormat{}, 11),
-      videoR_(options.video ? options.video->format : VideoFormat{},
-              options.audio ? options.audio->format : AudioFormat{}, 12),
-      audioP_(options.video ? options.video->format : VideoFormat{},
-              options.audio ? options.audio->format : AudioFormat{}, 13),
-      audioR_(options.video ? options.video->format : VideoFormat{},
-              options.audio ? options.audio->format : AudioFormat{}, 14) {
-    if (options_.video) {
-        monitor_.setVideoPacketsPerFrame(videoP_.videoParams().packetsPerFrame);
+std::unique_ptr<DemoSource::Generator> DemoSource::makeGenerator(const FlowConfig& config,
+                                                                 std::shared_ptr<FlowMonitor> monitor) {
+    auto g = std::make_unique<Generator>();
+    g->config = config;
+    g->monitor = std::move(monitor);
+    const VideoFormat vf = config.video ? config.video->format : VideoFormat{};
+    const AudioFormat af = config.audio ? config.audio->format : AudioFormat{};
+    g->senderP = std::make_unique<SyntheticSender>(vf, af, seed_++);
+    g->senderR = std::make_unique<SyntheticSender>(vf, af, seed_++);
+    if (g->monitor && config.video) {
+        g->monitor->setVideoPacketsPerFrame(g->senderP->videoParams().packetsPerFrame);
     }
-    monitor_.addEvent("info", "Demo gestartet: synthetische Ströme ohne Karte");
+    return g;
+}
+
+DemoSource::DemoSource(const Options& options, MonitorHub& hub) : hub_(hub) {
+    // Weitere Flows im simulierten Netz (nur über die Erkennung sichtbar, per Klick überwachbar).
+    background_ = {
+        spec(Media::Video, "239.100.0.21:20000,red=239.101.0.21:20000,format=1280x720p50,name=Kamera 3"),
+        spec(Media::Audio, "239.100.0.22:30000,format=L24/48000/2,ptime=1,name=Kamera 3 Ton"),
+        spec(Media::Audio, "239.100.0.31:30000,format=L24/48000/16,ptime=0.125,name=Saal-Mikrofone"),
+    };
+    for (const auto& flow : options.flows) {
+        std::string error;
+        addFlow(flow, error);
+        if (!error.empty()) {
+            hub_.addEvent("error", "Demo: " + error);
+        }
+    }
+    {
+        std::lock_guard lock(mutex_);
+        for (const auto& b : background_) {
+            generators_.push_back(makeGenerator(b, nullptr));
+        }
+    }
+    hub_.setDiscoveryStatus(nlohmann::json{
+        {"interface", "demo"}, {"active", true}, {"sap", true}, {"error", nullptr}, {"sapError", nullptr}});
+    hub_.addEvent("info", "Demo gestartet: synthetische Flows ohne Karte");
     thread_ = std::thread([this] { run(); });
 }
 
@@ -54,6 +173,52 @@ DemoSource::~DemoSource() {
     if (thread_.joinable()) {
         thread_.join();
     }
+}
+
+std::string DemoSource::addFlow(const FlowConfig& flow, std::string& error) {
+    auto monitor = hub_.addFlow(flow, error);
+    if (!monitor) {
+        return {};
+    }
+    std::lock_guard lock(mutex_);
+    // Läuft der Flow schon im simulierten Netz, nur den Monitor anhängen.
+    for (auto& g : generators_) {
+        if (!g->monitor && g->config.primary().ip == flow.primary().ip &&
+            g->config.primary().udpPort == flow.primary().udpPort) {
+            g->monitor = monitor;
+            if (flow.video) {
+                monitor->setVideoPacketsPerFrame(g->senderP->videoParams().packetsPerFrame);
+            }
+            return monitor->id();
+        }
+    }
+    generators_.push_back(makeGenerator(monitor->config(), monitor));
+    return monitor->id();
+}
+
+bool DemoSource::removeFlow(const std::string& id, std::string& error) {
+    {
+        std::lock_guard lock(mutex_);
+        for (auto it = generators_.begin(); it != generators_.end(); ++it) {
+            if ((*it)->monitor && (*it)->monitor->id() == id) {
+                const bool background =
+                    std::any_of(background_.begin(), background_.end(), [&](const FlowConfig& b) {
+                        return b.primary().ip == (*it)->config.primary().ip;
+                    });
+                if (background) {
+                    (*it)->monitor.reset(); // bleibt im Netz sichtbar
+                } else {
+                    generators_.erase(it);
+                }
+                break;
+            }
+        }
+    }
+    if (!hub_.removeFlow(id)) {
+        error = "Flow " + id + " nicht gefunden.";
+        return false;
+    }
+    return true;
 }
 
 bool DemoSource::setPreset(const std::string& id) {
@@ -84,7 +249,7 @@ bool DemoSource::setPreset(const std::string& id) {
     }
     for (const auto& p : presets()) {
         if (p.id == id) {
-            monitor_.addEvent("info", "Demo: Störung „" + p.label + "“ – " + p.description);
+            hub_.addEvent("info", "Demo: Störung „" + p.label + "“ – " + p.description);
         }
     }
     return true;
@@ -95,107 +260,220 @@ std::string DemoSource::preset() const {
     return preset_;
 }
 
-void DemoSource::emitVideo(uint64_t frame, const SenderFaults& faults) {
-    const int lostP = videoP_.videoFrame(frame, faults, 0.0, [&](uint32_t rtp, uint64_t ns, int idx) {
-        monitor_.onVideoPacket(Path::Primary, rtp, ns, idx, true);
-    });
-    const int packets = videoP_.videoParams().packetsPerFrame;
-    auto& p = videoCounters_.paths[0];
-    p.packets += static_cast<uint64_t>(packets - lostP);
-    p.bytes += static_cast<uint64_t>(packets - lostP) * 1262;
-    p.lost += static_cast<uint64_t>(lostP);
-    videoCounters_.lost += static_cast<uint64_t>(lostP);
-    videoCounters_.received += static_cast<uint64_t>(packets);
-    if (options_.video->redundant) {
-        const int lostR =
-            videoR_.videoFrame(frame, faults, faults.pathSkewNs, [&](uint32_t rtp, uint64_t ns, int idx) {
-                monitor_.onVideoPacket(Path::Redundant, rtp, ns, idx, true);
-            });
-        auto& r = videoCounters_.paths[1];
-        r.packets += static_cast<uint64_t>(packets - lostR);
-        r.bytes += static_cast<uint64_t>(packets - lostR) * 1262;
-        r.lost += static_cast<uint64_t>(lostR);
-        videoCounters_.lost += static_cast<uint64_t>(lostR);
-        videoCounters_.redundant += static_cast<uint64_t>(packets - lostR);
-    } else {
-        videoCounters_.unrecovered += static_cast<uint64_t>(lostP);
-        videoCounters_.received -= static_cast<uint64_t>(lostP);
+void DemoSource::discoverVideo(const Generator& g, uint64_t frame, bool redundant, double /*skewNs*/) {
+    const auto& v = g.config.video->format;
+    const FlowAddress& a = redundant ? *g.config.redundant() : g.config.primary();
+    const int packets = g.senderP->videoParams().packetsPerFrame;
+    const uint32_t lines = v.interlaced ? v.height / 2 : v.height;
+    const uint32_t rtp = static_cast<uint32_t>(static_cast<uint64_t>(
+        static_cast<long double>(frame) * framePeriodNs(v.rate) * 90000.0L / 1e9L + 1e-6L));
+    PacketInfo p;
+    p.srcIp = kSenderIp;
+    p.dstIp = ipOf(a.ip);
+    p.srcPort = 10000;
+    p.dstPort = a.udpPort;
+    p.dscp = 34;
+    p.wireBytes = 1262;
+    p.rtp = true;
+    p.payloadType = g.config.payloadType();
+    p.ssrc = 0x1000 + p.dstIp;
+    p.timestamp = rtp;
+    p.rtpPayload = 1208;
+    p.rfc4175 = true;
+    p.videoBytes = 1200;
+    p.secondField = v.interlaced && (frame % 2 == 1);
+    // erstes Paket stellvertretend für alle außer dem letzten, dann das letzte mit Marker
+    p.sequence = static_cast<uint16_t>(frame * static_cast<uint64_t>(packets));
+    p.row = 0;
+    hub_.onDiscoveredPacket(p, static_cast<uint32_t>(packets - 1));
+    p.sequence = static_cast<uint16_t>(p.sequence + packets - 1);
+    p.row = static_cast<uint16_t>(lines - 1);
+    p.marker = true;
+    hub_.onDiscoveredPacket(p, 1);
+}
+
+void DemoSource::discoverAudio(Generator& g, uint64_t firstPacket, uint32_t count) {
+    const auto& af = g.config.audio->format;
+    for (int path = 0; path < (g.config.redundant() ? 2 : 1); ++path) {
+        const FlowAddress& a = path == 0 ? g.config.primary() : *g.config.redundant();
+        PacketInfo p;
+        p.srcIp = kSenderIp;
+        p.dstIp = ipOf(a.ip);
+        p.srcPort = 10000;
+        p.dstPort = a.udpPort;
+        p.dscp = 46;
+        p.rtpPayload = static_cast<uint16_t>(af.payloadBytes());
+        p.wireBytes = p.rtpPayload + 54u;
+        p.rtp = true;
+        p.payloadType = g.config.payloadType();
+        p.ssrc = 0x2000 + p.dstIp;
+        p.sequence = static_cast<uint16_t>(firstPacket);
+        p.timestamp = static_cast<uint32_t>(firstPacket * af.samplesPerPacket());
+        hub_.onDiscoveredPacket(p, count);
     }
 }
 
-void DemoSource::emitAudio(uint64_t packet, const SenderFaults& faults) {
-    const uint64_t bytes = options_.audio->format.payloadBytes() + 54;
-    if (audioP_.audioPacket(packet, faults, 0.0, [&](uint32_t rtp, uint64_t ns) {
-            monitor_.onAudioPacket(Path::Primary, rtp, ns, true);
-        })) {
-        audioCounters_.paths[0].packets++;
-        audioCounters_.paths[0].bytes += bytes;
-        audioCounters_.received++;
+void DemoSource::emitVideo(Generator& g, uint64_t frame, const SenderFaults& faults) {
+    const int packets = g.senderP->videoParams().packetsPerFrame;
+    auto& c = g.counters;
+    const int lostP = g.senderP->videoFrame(frame, faults, 0.0, [&](uint32_t rtp, uint64_t ns, int idx) {
+        if (g.monitor) {
+            g.monitor->onVideoPacket(Path::Primary, rtp, ns, idx, true);
+        }
+    });
+    c.paths[0].packets += static_cast<uint64_t>(packets - lostP);
+    c.paths[0].bytes += static_cast<uint64_t>(packets - lostP) * 1262;
+    c.paths[0].lost += static_cast<uint64_t>(lostP);
+    c.lost += static_cast<uint64_t>(lostP);
+    c.received += static_cast<uint64_t>(packets);
+    discoverVideo(g, frame, false, 0.0);
+    if (g.config.redundant()) {
+        const int lostR =
+            g.senderR->videoFrame(frame, faults, faults.pathSkewNs, [&](uint32_t rtp, uint64_t ns, int idx) {
+                if (g.monitor) {
+                    g.monitor->onVideoPacket(Path::Redundant, rtp, ns, idx, true);
+                }
+            });
+        c.paths[1].packets += static_cast<uint64_t>(packets - lostR);
+        c.paths[1].bytes += static_cast<uint64_t>(packets - lostR) * 1262;
+        c.paths[1].lost += static_cast<uint64_t>(lostR);
+        c.lost += static_cast<uint64_t>(lostR);
+        c.redundant += static_cast<uint64_t>(packets - lostR);
+        discoverVideo(g, frame, true, faults.pathSkewNs);
     } else {
-        audioCounters_.paths[0].lost++;
-        audioCounters_.lost++;
+        c.unrecovered += static_cast<uint64_t>(lostP);
+        c.received -= static_cast<uint64_t>(lostP);
     }
-    if (options_.audio->redundant) {
-        if (audioR_.audioPacket(packet, faults, faults.pathSkewNs, [&](uint32_t rtp, uint64_t ns) {
-                monitor_.onAudioPacket(Path::Redundant, rtp, ns, true);
+}
+
+void DemoSource::emitAudio(Generator& g, uint64_t packet, const SenderFaults& faults) {
+    auto& c = g.counters;
+    const uint64_t bytes = g.config.audio->format.payloadBytes() + 54;
+    if (g.senderP->audioPacket(packet, faults, 0.0, [&](uint32_t rtp, uint64_t ns) {
+            if (g.monitor) {
+                g.monitor->onAudioPacket(Path::Primary, rtp, ns, true);
+            }
+        })) {
+        c.paths[0].packets++;
+        c.paths[0].bytes += bytes;
+        c.received++;
+    } else {
+        c.paths[0].lost++;
+        c.lost++;
+    }
+    if (g.config.redundant()) {
+        if (g.senderR->audioPacket(packet, faults, faults.pathSkewNs, [&](uint32_t rtp, uint64_t ns) {
+                if (g.monitor) {
+                    g.monitor->onAudioPacket(Path::Redundant, rtp, ns, true);
+                }
             })) {
-            audioCounters_.paths[1].packets++;
-            audioCounters_.paths[1].bytes += bytes;
-            audioCounters_.redundant++;
+            c.paths[1].packets++;
+            c.paths[1].bytes += bytes;
+            c.redundant++;
         } else {
-            audioCounters_.paths[1].lost++;
-            audioCounters_.lost++;
+            c.paths[1].lost++;
+            c.lost++;
         }
     }
+}
+
+void DemoSource::announce() {
+    // Kamera 3 (nur im Netz) und Kamera 1 (sofern vorhanden) wie ein Sender per SAP ankündigen.
+    std::vector<FlowConfig> cam3(background_.begin(), background_.begin() + 2);
+    SapMessage m;
+    m.origin = "10.10.0.1";
+    m.hash = 0x0301;
+    m.sdp = sdpFor("Kamera 3", cam3);
+    hub_.onSapMessage(m);
+    std::vector<FlowConfig> mics{background_[2]};
+    m.hash = 0x0401;
+    m.sdp = sdpFor("Saal-Mikrofone", mics);
+    hub_.onSapMessage(m);
 }
 
 void DemoSource::run() {
     std::mt19937_64 rng(99);
-    const double frameNs = options_.video ? framePeriodNs(options_.video->format.rate) : 0.0;
-    const double audioNs = options_.audio ? packetTimeNs(options_.audio->format.ptime) : 0.0;
-    // Erst ab dem nächsten vollen Zeitraum erzeugen.
-    const uint64_t start = taiNowNs();
-    uint64_t nextFrame = frameNs > 0 ? static_cast<uint64_t>(std::floor(start / frameNs)) : 0;
-    uint64_t nextAudio = audioNs > 0 ? static_cast<uint64_t>(std::floor(start / audioNs)) : 0;
     auto nextPtp = std::chrono::steady_clock::now();
     auto nextCounters = nextPtp;
+    auto nextSap = nextPtp;
+    auto nextExtras = nextPtp;
 
     while (!stop_) {
-        SenderFaults faults;
-        double ptpNoise;
+        const uint64_t now = taiNowNs();
         {
             std::lock_guard lock(mutex_);
-            faults = faults_;
-            ptpNoise = ptpNoiseNs_;
-        }
-        // Nur Zeiträume erzeugen, die vollständig vergangen sind.
-        const uint64_t now = taiNowNs();
-        if (frameNs > 0) {
-            const auto last = static_cast<uint64_t>(std::floor(now / frameNs));
-            for (; nextFrame + 1 < last && !stop_; ++nextFrame) {
-                emitVideo(nextFrame, faults);
-            }
-        }
-        if (audioNs > 0) {
-            const auto last = static_cast<uint64_t>(std::floor(now / audioNs));
-            for (; nextAudio + 2 < last && !stop_; ++nextAudio) {
-                emitAudio(nextAudio, faults);
+            const SenderFaults faults = faults_;
+            for (auto& gp : generators_) {
+                Generator& g = *gp;
+                const double period = epochNs(g.config);
+                const auto last = static_cast<uint64_t>(std::floor(static_cast<double>(now) / period));
+                if (!g.started) {
+                    g.next = last;
+                    g.started = true;
+                }
+                // Nur Zeiträume erzeugen, die vollständig vergangen sind.
+                if (g.config.video) {
+                    for (; g.next + 1 < last && !stop_; ++g.next) {
+                        emitVideo(g, g.next, faults);
+                    }
+                } else {
+                    const uint64_t first = g.next;
+                    for (; g.next + 2 < last && !stop_; ++g.next) {
+                        emitAudio(g, g.next, faults);
+                    }
+                    if (g.next > first) {
+                        discoverAudio(g, first, static_cast<uint32_t>(g.next - first));
+                    }
+                }
             }
         }
         const auto steady = std::chrono::steady_clock::now();
         if (steady >= nextPtp) {
-            std::normal_distribution<double> noise(0.0, ptpNoise);
-            monitor_.onPtpSync(static_cast<int64_t>(noise(rng)), 37);
+            double noise;
+            {
+                std::lock_guard lock(mutex_);
+                noise = ptpNoiseNs_;
+            }
+            std::normal_distribution<double> dist(0.0, noise);
+            hub_.onPtpSync(static_cast<int64_t>(dist(rng)), 37);
             nextPtp += std::chrono::milliseconds(125);
         }
+        if (steady >= nextExtras) {
+            // PTP-Pakete und Zusatzdaten (ST 2110-40) im Netz
+            PacketInfo ptp;
+            ptp.srcIp = (10u << 24) | (10u << 16) | 254;
+            ptp.dstIp = (224u << 24) | (0u << 16) | (1u << 8) | 129; // 224.0.1.129
+            ptp.srcPort = 319;
+            ptp.dstPort = 319;
+            ptp.wireBytes = 86;
+            hub_.onDiscoveredPacket(ptp, 2);
+            ptp.dstPort = 320;
+            hub_.onDiscoveredPacket(ptp, 2);
+            PacketInfo anc;
+            anc.srcIp = kSenderIp;
+            anc.dstIp = (239u << 24) | (100u << 16) | 23;
+            anc.srcPort = 10000;
+            anc.dstPort = 40000;
+            anc.wireBytes = 120;
+            anc.rtp = true;
+            anc.payloadType = 100;
+            anc.rtpPayload = 66;
+            anc.timestamp = static_cast<uint32_t>(static_cast<uint64_t>(now / 20'000'000ULL) * 1800ULL);
+            hub_.onDiscoveredPacket(anc, 25);
+            nextExtras += std::chrono::milliseconds(500);
+        }
         if (steady >= nextCounters) {
-            if (options_.video) {
-                monitor_.setCounters(Media::Video, videoCounters_);
-            }
-            if (options_.audio) {
-                monitor_.setCounters(Media::Audio, audioCounters_);
+            std::lock_guard lock(mutex_);
+            for (auto& g : generators_) {
+                if (g->monitor) {
+                    g->monitor->setCounters(g->counters);
+                }
             }
             nextCounters += std::chrono::milliseconds(500);
+        }
+        if (steady >= nextSap) {
+            announce();
+            nextSap += std::chrono::seconds(30);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }

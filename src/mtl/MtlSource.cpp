@@ -1,14 +1,17 @@
 #include "mtl/MtlSource.h"
 
+#include <algorithm>
 #include <arpa/inet.h>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <mtl_api.h>
+#include <mutex>
 #include <st20_api.h>
 #include <st30_api.h>
 #include <thread>
+#include <vector>
 
 namespace st2110 {
 namespace {
@@ -162,39 +165,17 @@ bool toIpv4(const std::string& text, uint8_t* out) {
 
 } // namespace
 
-struct MtlSource::Impl {
-    Options options;
-    Monitor& monitor;
-    std::string lcores;
-    mtl_handle mtl = nullptr;
+// Eine MTL-Sitzung je Flow; priv der Rückrufe zeigt auf diese Struktur.
+struct FlowSession {
+    std::shared_ptr<FlowMonitor> monitor;
     st20_rx_handle video = nullptr;
     st30_rx_handle audio = nullptr;
-    std::atomic<bool> passKnown{false};
-    std::atomic<bool> stopping{false};
-    std::thread statsThread;
-
-    Impl(const Options& o, Monitor& m) : options(o), monitor(m) {}
-
-    ~Impl() {
-        stopping = true;
-        if (statsThread.joinable()) {
-            statsThread.join();
-        }
-        if (video != nullptr) {
-            st20_rx_free(video);
-        }
-        if (audio != nullptr) {
-            st30_rx_free(audio);
-        }
-        if (mtl != nullptr) {
-            mtl_uninit(mtl);
-        }
-    }
+    bool passKnown = false;
 
     // --- Rückrufe aus dem Datenpfad von MTL (kurz halten) ---
 
     static int onVideoFrame(void* priv, void* frame, struct st20_rx_frame_meta* meta) {
-        auto* self = static_cast<Impl*>(priv);
+        auto* self = static_cast<FlowSession*>(priv);
         VideoFrameReport report;
         switch (meta->status) {
         case ST_FRAME_STATUS_COMPLETE:
@@ -220,43 +201,81 @@ struct MtlSource::Impl {
         }
         // Bildinhalt wird nicht gebraucht: sofort zurückgeben.
         st20_rx_put_framebuff(self->video, frame);
-        self->monitor.onVideoFrame(report);
+        self->monitor->onVideoFrame(report);
         return 0;
     }
 
     static int onAudioFrame(void* priv, void* frame, struct st30_rx_frame_meta* /*meta*/) {
-        auto* self = static_cast<Impl*>(priv);
+        auto* self = static_cast<FlowSession*>(priv);
         st30_rx_put_framebuff(self->audio, frame);
         return 0;
     }
 
     static int onAudioTiming(void* priv, enum mtl_session_port port, struct st30_rx_tp_meta* tp) {
-        auto* self = static_cast<Impl*>(priv);
-        self->monitor.onAudioPeriod(port == MTL_SESSION_PORT_R ? Path::Redundant : Path::Primary,
-                                    toAudioTiming(*tp));
+        auto* self = static_cast<FlowSession*>(priv);
+        self->monitor->onAudioPeriod(port == MTL_SESSION_PORT_R ? Path::Redundant : Path::Primary,
+                                     toAudioTiming(*tp));
         return 0;
-    }
-
-    static void onPtpSync(void* priv, struct mtl_ptp_sync_notify_meta* meta) {
-        auto* self = static_cast<Impl*>(priv);
-        self->monitor.onPtpSync(meta->delta, meta->master_utc_offset);
     }
 
 #ifdef ST20_RX_TP_PACKET_HOOK
     static void onVideoPacket(void* priv, enum mtl_session_port port, uint32_t rtp, uint64_t ns, int idx,
                               bool hw) {
-        auto* self = static_cast<Impl*>(priv);
-        self->monitor.onVideoPacket(port == MTL_SESSION_PORT_R ? Path::Redundant : Path::Primary, rtp, ns,
-                                    idx, hw);
+        auto* self = static_cast<FlowSession*>(priv);
+        self->monitor->onVideoPacket(port == MTL_SESSION_PORT_R ? Path::Redundant : Path::Primary, rtp, ns,
+                                     idx, hw);
     }
 #endif
 #ifdef ST30_RX_TP_PACKET_HOOK
     static void onAudioPacket(void* priv, enum mtl_session_port port, uint32_t rtp, uint64_t ns, bool hw) {
-        auto* self = static_cast<Impl*>(priv);
-        self->monitor.onAudioPacket(port == MTL_SESSION_PORT_R ? Path::Redundant : Path::Primary, rtp, ns,
-                                    hw);
+        auto* self = static_cast<FlowSession*>(priv);
+        self->monitor->onAudioPacket(port == MTL_SESSION_PORT_R ? Path::Redundant : Path::Primary, rtp, ns,
+                                     hw);
     }
 #endif
+
+    void free() {
+        if (video != nullptr) {
+            st20_rx_free(video);
+            video = nullptr;
+        }
+        if (audio != nullptr) {
+            st30_rx_free(audio);
+            audio = nullptr;
+        }
+    }
+};
+
+struct MtlSource::Impl {
+    Options options;
+    MonitorHub& hub;
+    std::string lcores;
+    mtl_handle mtl = nullptr;
+    std::mutex mutex; // schützt sessions
+    std::vector<std::unique_ptr<FlowSession>> sessions;
+    std::atomic<bool> stopping{false};
+    std::thread statsThread;
+
+    Impl(const Options& o, MonitorHub& h) : options(o), hub(h) {}
+
+    ~Impl() {
+        stopping = true;
+        if (statsThread.joinable()) {
+            statsThread.join();
+        }
+        for (auto& s : sessions) {
+            s->free();
+        }
+        sessions.clear();
+        if (mtl != nullptr) {
+            mtl_uninit(mtl);
+        }
+    }
+
+    static void onPtpSync(void* priv, struct mtl_ptp_sync_notify_meta* meta) {
+        auto* self = static_cast<Impl*>(priv);
+        self->hub.onPtpSync(meta->delta, meta->master_utc_offset);
+    }
 
     // --- Statistik (eigener Thread) ---
 
@@ -265,23 +284,26 @@ struct MtlSource::Impl {
             for (int i = 0; i < 10 && !stopping; ++i) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
             }
-            if (video != nullptr) {
-                struct st20_rx_user_stats s {};
-                if (st20_rx_get_session_stats(video, &s) >= 0) {
-                    monitor.setCounters(Media::Video, toCounters(s.common, s.stat_frames_incomplete));
-                }
-                if (!passKnown) {
-                    struct st20_rx_tp_pass pass {};
-                    if (st20_rx_timing_parser_critical(video, &pass) >= 0) {
-                        monitor.setVideoPassCriteria(toPassCriteria(pass));
-                        passKnown = true;
+            std::lock_guard lock(mutex);
+            for (auto& s : sessions) {
+                if (s->video != nullptr) {
+                    struct st20_rx_user_stats stats {};
+                    if (st20_rx_get_session_stats(s->video, &stats) >= 0) {
+                        s->monitor->setCounters(toCounters(stats.common, stats.stat_frames_incomplete));
+                    }
+                    if (!s->passKnown) {
+                        struct st20_rx_tp_pass pass {};
+                        if (st20_rx_timing_parser_critical(s->video, &pass) >= 0) {
+                            s->monitor->setVideoPassCriteria(toPassCriteria(pass));
+                            s->passKnown = true;
+                        }
                     }
                 }
-            }
-            if (audio != nullptr) {
-                struct st30_rx_user_stats s {};
-                if (st30_rx_get_session_stats(audio, &s) >= 0) {
-                    monitor.setCounters(Media::Audio, toCounters(s.common, s.stat_frames_incomplete));
+                if (s->audio != nullptr) {
+                    struct st30_rx_user_stats stats {};
+                    if (st30_rx_get_session_stats(s->audio, &stats) >= 0) {
+                        s->monitor->setCounters(toCounters(stats.common, stats.stat_frames_incomplete));
+                    }
                 }
             }
         }
@@ -291,6 +313,10 @@ struct MtlSource::Impl {
     template <typename Ops>
     bool fillPorts(Ops& ops, const FlowAddress& primary, const std::optional<FlowAddress>& redundant,
                    std::string& error) {
+        if (redundant && !options.redundantPort) {
+            error = "Redundanter Flow ohne Port R (--red-port).";
+            return false;
+        }
         const FlowAddress* flows[2] = {&primary, redundant ? &*redundant : nullptr};
         ops.num_port = redundant ? 2 : 1;
         for (int i = 0; i < ops.num_port; ++i) {
@@ -308,6 +334,74 @@ struct MtlSource::Impl {
         }
         return true;
     }
+
+    // Startet die MTL-Sitzung für einen Flow des Hubs.
+    bool openSession(FlowSession& session, std::string& error) {
+        const FlowConfig& c = session.monitor->config();
+        if (c.video) {
+            const auto& v = *c.video;
+            struct st20_rx_ops ops {};
+            ops.name = c.id.c_str();
+            ops.priv = &session;
+            if (!fillPorts(ops, v.primary, v.redundant, error)) {
+                return false;
+            }
+            ops.type = ST20_TYPE_FRAME_LEVEL;
+            ops.width = v.format.width;
+            ops.height = v.format.height;
+            ops.fps = toMtlFps(v.format.rate);
+            ops.interlaced = v.format.interlaced;
+            ops.fmt = ST20_FMT_YUV_422_10BIT;
+            ops.payload_type = v.payloadType;
+            ops.framebuff_cnt = 3;
+            ops.notify_frame_ready = &FlowSession::onVideoFrame;
+            ops.flags = ST20_RX_FLAG_TIMING_PARSER_META | ST20_RX_FLAG_RECEIVE_INCOMPLETE_FRAME;
+#ifdef ST20_RX_TP_PACKET_HOOK
+            ops.notify_tp_packet = &FlowSession::onVideoPacket;
+#endif
+            session.video = st20_rx_create(mtl, &ops);
+            if (session.video == nullptr) {
+                error =
+                    "st20_rx_create fehlgeschlagen (Format, Adresse oder Queues prüfen; Details im MTL-Log).";
+                return false;
+            }
+            return true;
+        }
+        const auto& a = *c.audio;
+        struct st30_rx_ops ops {};
+        ops.name = c.id.c_str();
+        ops.priv = &session;
+        if (!fillPorts(ops, a.primary, a.redundant, error)) {
+            return false;
+        }
+        ops.type = ST30_TYPE_FRAME_LEVEL;
+        ops.fmt = a.format.bitDepth == 16 ? ST30_FMT_PCM16 : ST30_FMT_PCM24;
+        ops.channel = a.format.channels;
+        ops.sampling = a.format.sampleRate == 96000 ? ST30_SAMPLING_96K : ST30_SAMPLING_48K;
+        ops.ptime = toMtlPtime(a.format.ptime);
+        ops.payload_type = a.payloadType;
+        double fps = 0;
+        const int size = st30_calculate_framebuff_size(ops.fmt, ops.ptime, ops.sampling, ops.channel,
+                                                       10ULL * 1000 * 1000, &fps);
+        if (size <= 0) {
+            error = "Tonformat wird von MTL nicht unterstützt (st30_calculate_framebuff_size).";
+            return false;
+        }
+        ops.framebuff_size = static_cast<uint32_t>(size);
+        ops.framebuff_cnt = 4;
+        ops.notify_frame_ready = &FlowSession::onAudioFrame;
+        ops.notify_timing_parser_result = &FlowSession::onAudioTiming;
+        ops.flags = ST30_RX_FLAG_TIMING_PARSER_META;
+#ifdef ST30_RX_TP_PACKET_HOOK
+        ops.notify_tp_packet = &FlowSession::onAudioPacket;
+#endif
+        session.audio = st30_rx_create(mtl, &ops);
+        if (session.audio == nullptr) {
+            error = "st30_rx_create fehlgeschlagen (Format, Adresse oder Queues prüfen; Details im MTL-Log).";
+            return false;
+        }
+        return true;
+    }
 };
 
 bool MtlSource::hasPacketHook() {
@@ -318,14 +412,13 @@ bool MtlSource::hasPacketHook() {
 #endif
 }
 
-std::unique_ptr<MtlSource> MtlSource::create(const Options& options, Monitor& monitor, std::string& error) {
-    auto impl = std::make_unique<Impl>(options, monitor);
+std::unique_ptr<MtlSource> MtlSource::create(const Options& options, MonitorHub& hub, std::string& error) {
+    auto impl = std::make_unique<Impl>(options, hub);
 
     struct mtl_init_params params {};
     params.num_ports = options.redundantPort ? 2 : 1;
     const PortOptions* ports[2] = {&options.primaryPort,
                                    options.redundantPort ? &*options.redundantPort : nullptr};
-    const uint16_t sessions = static_cast<uint16_t>((options.video ? 1 : 0) + (options.audio ? 1 : 0));
     for (int i = 0; i < params.num_ports; ++i) {
         std::snprintf(params.port[i], MTL_PORT_MAX_LEN, "%s", ports[i]->port.c_str());
         params.pmd[i] = mtl_pmd_by_port_name(params.port[i]);
@@ -333,7 +426,8 @@ std::unique_ptr<MtlSource> MtlSource::create(const Options& options, Monitor& mo
             error = "Ungültige eigene Adresse: " + ports[i]->localIp;
             return nullptr;
         }
-        params.rx_queues_cnt[i] = sessions;
+        // Je Flow eine Empfangs-Queue; auch für Flows, die erst zur Laufzeit dazukommen.
+        params.rx_queues_cnt[i] = static_cast<uint16_t>(options.maxFlows);
         params.tx_queues_cnt[i] = 0; // nur Empfang
     }
     params.flags |= MTL_FLAG_BIND_NUMA | MTL_FLAG_DEV_AUTO_START_STOP;
@@ -356,78 +450,56 @@ std::unique_ptr<MtlSource> MtlSource::create(const Options& options, Monitor& mo
         error = "mtl_init fehlgeschlagen (Port an DPDK gebunden? Hugepages? Rechte? Details im MTL-Log).";
         return nullptr;
     }
-
-    if (options.video) {
-        const auto& v = *options.video;
-        struct st20_rx_ops ops {};
-        ops.name = "st2110-video";
-        ops.priv = impl.get();
-        if (!impl->fillPorts(ops, v.primary, v.redundant, error)) {
-            return nullptr;
-        }
-        ops.type = ST20_TYPE_FRAME_LEVEL;
-        ops.width = v.format.width;
-        ops.height = v.format.height;
-        ops.fps = toMtlFps(v.format.rate);
-        ops.interlaced = v.format.interlaced;
-        ops.fmt = ST20_FMT_YUV_422_10BIT;
-        ops.payload_type = v.payloadType;
-        ops.framebuff_cnt = 3;
-        ops.notify_frame_ready = &Impl::onVideoFrame;
-        ops.flags = ST20_RX_FLAG_TIMING_PARSER_META | ST20_RX_FLAG_RECEIVE_INCOMPLETE_FRAME;
-#ifdef ST20_RX_TP_PACKET_HOOK
-        ops.notify_tp_packet = &Impl::onVideoPacket;
-#endif
-        impl->video = st20_rx_create(impl->mtl, &ops);
-        if (impl->video == nullptr) {
-            error = "st20_rx_create fehlgeschlagen (Format, Adresse oder Queues prüfen; Details im MTL-Log).";
-            return nullptr;
-        }
-    }
-
-    if (options.audio) {
-        const auto& a = *options.audio;
-        struct st30_rx_ops ops {};
-        ops.name = "st2110-audio";
-        ops.priv = impl.get();
-        if (!impl->fillPorts(ops, a.primary, a.redundant, error)) {
-            return nullptr;
-        }
-        ops.type = ST30_TYPE_FRAME_LEVEL;
-        ops.fmt = a.format.bitDepth == 16 ? ST30_FMT_PCM16 : ST30_FMT_PCM24;
-        ops.channel = a.format.channels;
-        ops.sampling = a.format.sampleRate == 96000 ? ST30_SAMPLING_96K : ST30_SAMPLING_48K;
-        ops.ptime = toMtlPtime(a.format.ptime);
-        ops.payload_type = a.payloadType;
-        double fps = 0;
-        const int size = st30_calculate_framebuff_size(ops.fmt, ops.ptime, ops.sampling, ops.channel,
-                                                       10ULL * 1000 * 1000, &fps);
-        if (size <= 0) {
-            error = "Tonformat wird von MTL nicht unterstützt (st30_calculate_framebuff_size).";
-            return nullptr;
-        }
-        ops.framebuff_size = static_cast<uint32_t>(size);
-        ops.framebuff_cnt = 4;
-        ops.notify_frame_ready = &Impl::onAudioFrame;
-        ops.notify_timing_parser_result = &Impl::onAudioTiming;
-        ops.flags = ST30_RX_FLAG_TIMING_PARSER_META;
-#ifdef ST30_RX_TP_PACKET_HOOK
-        ops.notify_tp_packet = &Impl::onAudioPacket;
-#endif
-        impl->audio = st30_rx_create(impl->mtl, &ops);
-        if (impl->audio == nullptr) {
-            error = "st30_rx_create fehlgeschlagen (Format, Adresse oder Queues prüfen; Details im MTL-Log).";
-            return nullptr;
-        }
-    }
-
     if (!hasPacketHook()) {
-        monitor.addEvent("warn", "MTL ohne Paket-Rückruf gebaut: Histogramme und Paketprofile fehlen "
-                                 "(patches/mtl anwenden, siehe README).");
+        hub.addEvent("warn", "MTL ohne Paket-Rückruf gebaut: Histogramme und Paketprofile fehlen "
+                             "(patches/mtl anwenden, siehe README).");
     }
-    Impl* raw = impl.get();
-    impl->statsThread = std::thread([raw] { raw->statsLoop(); });
-    return std::unique_ptr<MtlSource>(new MtlSource(std::move(impl)));
+    std::unique_ptr<MtlSource> source(new MtlSource(std::move(impl)));
+    for (const auto& flow : options.flows) {
+        std::string flowError;
+        if (source->addFlow(flow, flowError).empty()) {
+            error = (flow.label.empty() ? flow.primary().ip : flow.label) + ": " + flowError;
+            return nullptr;
+        }
+    }
+    Impl* raw = source->impl_.get();
+    source->impl_->statsThread = std::thread([raw] { raw->statsLoop(); });
+    return source;
+}
+
+std::string MtlSource::addFlow(const FlowConfig& flow, std::string& error) {
+    auto monitor = impl_->hub.addFlow(flow, error);
+    if (!monitor) {
+        return {};
+    }
+    auto session = std::make_unique<FlowSession>();
+    session->monitor = monitor;
+    std::lock_guard lock(impl_->mutex);
+    if (!impl_->openSession(*session, error)) {
+        session->free();
+        impl_->hub.removeFlow(monitor->id());
+        return {};
+    }
+    impl_->sessions.push_back(std::move(session));
+    return monitor->id();
+}
+
+bool MtlSource::removeFlow(const std::string& id, std::string& error) {
+    {
+        std::lock_guard lock(impl_->mutex);
+        auto& list = impl_->sessions;
+        auto it =
+            std::find_if(list.begin(), list.end(), [&](const auto& s) { return s->monitor->id() == id; });
+        if (it == list.end()) {
+            error = "Flow " + id + " nicht gefunden.";
+            return false;
+        }
+        // Erst die Sitzung beenden (keine Rückrufe mehr), dann den Flow entfernen.
+        (*it)->free();
+        list.erase(it);
+    }
+    impl_->hub.removeFlow(id);
+    return true;
 }
 
 MtlSource::MtlSource(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}

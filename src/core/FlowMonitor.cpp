@@ -1,4 +1,4 @@
-#include "core/Monitor.h"
+#include "core/FlowMonitor.h"
 
 #include "core/Report.h"
 
@@ -11,17 +11,12 @@ using nlohmann::json;
 
 namespace {
 
-constexpr size_t kMaxEvents = 300;
 constexpr size_t kSeriesCapacity = 12000; // 50 Hz x 240 s
 constexpr size_t kMaxSeriesPoints = 1200;
 constexpr size_t kMaxProfilePoints = 2000;
 
 json flowToJson(const FlowAddress& f) {
-    json out{{"ip", f.ip}, {"udpPort", f.udpPort}};
-    if (!f.sourceIp.empty()) {
-        out["sourceIp"] = f.sourceIp;
-    }
-    return out;
+    return flowAddressToJson(f);
 }
 
 const char* levelFor(Compliance c) {
@@ -72,8 +67,16 @@ json frameCountersToJson(const FrameCounters& f) {
 
 } // namespace
 
-Monitor::Monitor(MonitorConfig config, Clock clock)
-    : config_(std::move(config)), clock_(std::move(clock)), startWall_(std::chrono::system_clock::now()) {
+json flowAddressToJson(const FlowAddress& f) {
+    json out{{"ip", f.ip}, {"udpPort", f.udpPort}};
+    if (!f.sourceIp.empty()) {
+        out["sourceIp"] = f.sourceIp;
+    }
+    return out;
+}
+
+FlowMonitor::FlowMonitor(FlowConfig config, EventSink sink, Clock clock)
+    : config_(std::move(config)), sink_(std::move(sink)), clock_(std::move(clock)) {
     if (!clock_) {
         const auto start = std::chrono::steady_clock::now();
         clock_ = [start] {
@@ -96,22 +99,20 @@ Monitor::Monitor(MonitorConfig config, Clock clock)
     }
 }
 
-void Monitor::addEvent(const std::string& level, const std::string& text) {
+void FlowMonitor::addEvent(const std::string& level, const std::string& text) {
     std::lock_guard lock(mutex_);
     addEventLocked(level, text);
 }
 
-void Monitor::addEventLocked(const std::string& level, const std::string& text) {
-    const double t = now();
-    const auto wall = startWall_ + std::chrono::duration_cast<std::chrono::system_clock::duration>(
-                                       std::chrono::duration<double>(t - startSec_));
-    events_.push_back(Event{t - startSec_, isoTimestamp(wall), level, text});
-    while (events_.size() > kMaxEvents) {
-        events_.pop_front();
+void FlowMonitor::addEventLocked(const std::string& level, const std::string& text) {
+    // Reihenfolge der Sperren: Flow vor Hub. Der Hub ruft Flows nie unter seiner Sperre auf.
+    if (sink_) {
+        sink_(config_.id, level, text);
     }
 }
 
-void Monitor::onVideoPacket(Path path, uint32_t rtpTimestamp, uint64_t arrivalNs, int packetIndex, bool hw) {
+void FlowMonitor::onVideoPacket(Path path, uint32_t rtpTimestamp, uint64_t arrivalNs, int packetIndex,
+                                bool hw) {
     std::lock_guard lock(mutex_);
     ++videoPackets_;
     if (!hw) {
@@ -132,7 +133,7 @@ void Monitor::onVideoPacket(Path path, uint32_t rtpTimestamp, uint64_t arrivalNs
     }
 }
 
-void Monitor::onVideoFrame(const VideoFrameReport& report) {
+void FlowMonitor::onVideoFrame(const VideoFrameReport& report) {
     std::lock_guard lock(mutex_);
     mtlVideoFrames_ = true;
     FrameCounters one;
@@ -167,19 +168,19 @@ void Monitor::onVideoFrame(const VideoFrameReport& report) {
     }
 }
 
-void Monitor::setVideoPassCriteria(const PassCriteria& criteria) {
+void FlowMonitor::setVideoPassCriteria(const PassCriteria& criteria) {
     std::lock_guard lock(mutex_);
     mtlVideoPass_ = criteria;
 }
 
-void Monitor::setVideoPacketsPerFrame(int packets) {
+void FlowMonitor::setVideoPacketsPerFrame(int packets) {
     std::lock_guard lock(mutex_);
     if (videoAnalyzer_) {
         videoAnalyzer_->setPacketsPerFrame(packets);
     }
 }
 
-void Monitor::recordVideoFrame(Path path, const FrameTiming& f) {
+void FlowMonitor::recordVideoFrame(Path path, const FrameTiming& f) {
     VideoPath& p = video_[pathIndex(path)];
     const double t = now() - startSec_;
     p.interval.add(f);
@@ -216,7 +217,7 @@ void Monitor::recordVideoFrame(Path path, const FrameTiming& f) {
     }
 }
 
-void Monitor::onAudioPacket(Path path, uint32_t rtpTimestamp, uint64_t arrivalNs, bool hw) {
+void FlowMonitor::onAudioPacket(Path path, uint32_t rtpTimestamp, uint64_t arrivalNs, bool hw) {
     std::lock_guard lock(mutex_);
     ++audioPackets_;
     if (!hw) {
@@ -231,13 +232,13 @@ void Monitor::onAudioPacket(Path path, uint32_t rtpTimestamp, uint64_t arrivalNs
     }
 }
 
-void Monitor::onAudioPeriod(Path path, const AudioTiming& timing) {
+void FlowMonitor::onAudioPeriod(Path path, const AudioTiming& timing) {
     std::lock_guard lock(mutex_);
     mtlAudioPeriods_ = true;
     recordAudioPeriod(path, timing);
 }
 
-void Monitor::recordAudioPeriod(Path path, const AudioTiming& a) {
+void FlowMonitor::recordAudioPeriod(Path path, const AudioTiming& a) {
     AudioPath& p = audio_[pathIndex(path)];
     const double t = now() - startSec_;
     p.interval.add(a);
@@ -257,52 +258,11 @@ void Monitor::recordAudioPeriod(Path path, const AudioTiming& a) {
     p.lastVerdict = a.compliance;
 }
 
-void Monitor::onPtpSync(int64_t deltaNs, int16_t utcOffset) {
+void FlowMonitor::setCounters(const StreamCounters& c) {
     std::lock_guard lock(mutex_);
-    const double t = now() - startSec_;
-    ptp_.onSync(t, deltaNs, utcOffset);
-    checkPtpLocked(t);
-}
-
-void Monitor::checkPtpLocked(double t) {
-    if (!config_.ptp && !config_.demo) {
-        return;
-    }
-    const PtpState state = ptp_.state(t);
-    if (ptpStateKnown_ && state == lastPtpState_) {
-        return;
-    }
-    if (!ptpStateKnown_ && state != PtpState::Locked) {
-        // Anlaufphase: "synchronisiert" nicht melden, "kein Sync" erst nach einigen Sekunden.
-        if (state == PtpState::NoSync && t >= 5.0) {
-            addEventLocked("error", "Kein PTP-Sync vom Grandmaster");
-            ptpStateKnown_ = true;
-            lastPtpState_ = state;
-        }
-        return;
-    }
-    switch (state) {
-    case PtpState::Locked:
-        addEventLocked("info", "PTP eingerastet (Korrektur < " +
-                                   std::to_string(static_cast<int>(PtpMonitor::Settings{}.lockThresholdNs)) +
-                                   " ns)");
-        break;
-    case PtpState::Syncing:
-        addEventLocked("warn",
-                       "PTP nicht eingerastet (Korrektur " + std::to_string(ptp_.lastDeltaNs()) + " ns)");
-        break;
-    case PtpState::NoSync:
-        addEventLocked("error", "Kein PTP-Sync vom Grandmaster");
-        break;
-    }
-    lastPtpState_ = state;
-    ptpStateKnown_ = true;
-}
-
-void Monitor::setCounters(Media media, const StreamCounters& c) {
-    std::lock_guard lock(mutex_);
-    CounterState& s = counters_[media == Media::Video ? 0 : 1];
-    const char* name = media == Media::Video ? "Video" : "Ton";
+    CounterState& s = counters_;
+    const char* name = config_.video ? "Video" : "Ton";
+    const double t = now();
     if (s.any) {
         for (size_t i = 0; i < kPathCount; ++i) {
             if (c.paths[i].lost > s.current.paths[i].lost) {
@@ -316,14 +276,27 @@ void Monitor::setCounters(Media media, const StreamCounters& c) {
                                         std::to_string(c.unrecovered - s.current.unrecovered) +
                                         " Pakete auch nach ST 2022-7 verloren");
         }
+        // Raten aus der Änderung seit der letzten Berechnung (mindestens 0,5 s Abstand).
+        const double dt = t - s.rateTime;
+        if (dt >= 0.5) {
+            for (size_t i = 0; i < kPathCount; ++i) {
+                s.pps[i] = static_cast<double>(c.paths[i].packets - s.rateBase.paths[i].packets) / dt;
+                s.bps[i] = static_cast<double>(c.paths[i].bytes - s.rateBase.paths[i].bytes) * 8.0 / dt;
+            }
+            s.rateBase = c;
+            s.rateTime = t;
+            s.ratesValid = true;
+        }
     } else {
         s.lastInterval = c;
+        s.rateBase = c;
+        s.rateTime = t;
     }
     s.current = c;
     s.any = true;
 }
 
-void Monitor::reset() {
+void FlowMonitor::reset() {
     std::lock_guard lock(mutex_);
     for (auto& p : video_) {
         p.total.reset();
@@ -346,13 +319,10 @@ void Monitor::reset() {
         audioAnalyzer_->resetTotals();
     }
     videoSkew_.resetTotals();
-    ptp_.resetTotals();
     videoPackets_ = videoSwPackets_ = audioPackets_ = audioSwPackets_ = 0;
-    events_.clear();
-    addEventLocked("info", "Messwerte zurückgesetzt");
 }
 
-json Monitor::profileToJson(const PacketProfile& profile) const {
+json FlowMonitor::profileToJson(const PacketProfile& profile) const {
     if (profile.empty()) {
         return nullptr;
     }
@@ -381,7 +351,7 @@ json Monitor::profileToJson(const PacketProfile& profile) const {
                 {"timing", frameTimingToJson(profile.timing)}};
 }
 
-json Monitor::countersJson(const StreamCounters& c) const {
+json FlowMonitor::countersJson(const StreamCounters& c) const {
     json paths = json::object();
     for (size_t i = 0; i < kPathCount; ++i) {
         const auto& p = c.paths[i];
@@ -395,7 +365,7 @@ json Monitor::countersJson(const StreamCounters& c) const {
                 {"wrongSsrc", c.wrongSsrc}, {"framesIncomplete", c.framesIncomplete}};
 }
 
-json Monitor::countersDelta(const StreamCounters& a, const StreamCounters& b) const {
+json FlowMonitor::countersDelta(const StreamCounters& a, const StreamCounters& b) const {
     StreamCounters d;
     for (size_t i = 0; i < kPathCount; ++i) {
         d.paths[i].packets = a.paths[i].packets - b.paths[i].packets;
@@ -415,7 +385,7 @@ json Monitor::countersDelta(const StreamCounters& a, const StreamCounters& b) co
     return countersJson(d);
 }
 
-json Monitor::videoSnapshot(const SnapshotData& d, double windowSec) const {
+json FlowMonitor::videoSnapshot(const SnapshotData& d, double windowSec) const {
     const auto& v = *config_.video;
     json flows{{"P", flowToJson(v.primary)}};
     if (v.redundant) {
@@ -486,7 +456,7 @@ json Monitor::videoSnapshot(const SnapshotData& d, double windowSec) const {
                 {"skew", skew}};
 }
 
-json Monitor::audioSnapshot(const SnapshotData& d, double windowSec) const {
+json FlowMonitor::audioSnapshot(const SnapshotData& d, double windowSec) const {
     const auto& a = *config_.audio;
     json flows{{"P", flowToJson(a.primary)}};
     if (a.redundant) {
@@ -526,12 +496,59 @@ json Monitor::audioSnapshot(const SnapshotData& d, double windowSec) const {
                 {"paths", paths}};
 }
 
-json Monitor::snapshot(double windowSec) {
+json FlowMonitor::ratesJson(const CounterState& c) const {
+    json out = json::object();
+    const size_t count = config_.redundant() ? 2 : 1;
+    for (size_t i = 0; i < count; ++i) {
+        out[pathKey(static_cast<Path>(i))] =
+            c.ratesValid ? json{{"pps", c.pps[i]}, {"bps", c.bps[i]}} : json(nullptr);
+    }
+    return out;
+}
+
+std::optional<Compliance> FlowMonitor::verdictLocked(Path path) const {
+    if (config_.video) {
+        const VideoPath& p = video_[pathIndex(path)];
+        if (p.lastSecondVerdict) {
+            return p.lastSecondVerdict;
+        }
+        return p.total.frames() ? std::optional<Compliance>(p.total.worst()) : std::nullopt;
+    }
+    return audio_[pathIndex(path)].lastVerdict;
+}
+
+json FlowMonitor::summary() {
+    std::lock_guard lock(mutex_);
+    json flows{{"P", flowToJson(config_.primary())}};
+    json verdicts = json::object();
+    verdicts["P"] =
+        verdictLocked(Path::Primary) ? json(complianceName(*verdictLocked(Path::Primary))) : json(nullptr);
+    if (config_.redundant()) {
+        flows["R"] = flowToJson(*config_.redundant());
+        verdicts["R"] = verdictLocked(Path::Redundant) ? json(complianceName(*verdictLocked(Path::Redundant)))
+                                                       : json(nullptr);
+    }
+    const auto& c = counters_.current;
+    return json{
+        {"id", config_.id},
+        {"label", config_.label},
+        {"kind", config_.video ? "video" : "audio"},
+        {"format", config_.formatName()},
+        {"payloadType", config_.payloadType()},
+        {"flows", flows},
+        {"verdict", verdicts},
+        {"rates", ratesJson(counters_)},
+        {"packets", counters_.any ? json(c.received) : json(nullptr)},
+        {"lost", counters_.any ? json(std::max(c.lost, c.paths[0].lost + c.paths[1].lost)) : json(nullptr)},
+        {"unrecovered", counters_.any ? json(c.unrecovered) : json(nullptr)},
+        {"units", config_.video ? framesTotal_.total() : audio_[0].total.periods()}};
+}
+
+json FlowMonitor::snapshot(double windowSec) {
     auto d = std::make_unique<SnapshotData>();
     {
         std::lock_guard lock(mutex_);
         d->t = now() - startSec_;
-        checkPtpLocked(d->t);
         for (size_t i = 0; i < kPathCount; ++i) {
             const VideoPath& src = video_[i];
             VideoPath& dst = d->video[i];
@@ -582,185 +599,115 @@ json Monitor::snapshot(double windowSec) {
         d->audioSwPackets = audioSwPackets_;
         d->skew = videoSkew_;
         d->skewSeries = videoSkew_.series().tail(windowSec);
-        d->ptp = ptp_;
         d->counters = counters_;
-        const size_t n = std::min<size_t>(events_.size(), 100);
-        d->events.assign(events_.end() - static_cast<std::ptrdiff_t>(n), events_.end());
-    }
-
-    json events = json::array();
-    for (auto it = d->events.rbegin(); it != d->events.rend(); ++it) {
-        events.push_back(json{{"t", it->t}, {"time", it->time}, {"level", it->level}, {"text", it->text}});
     }
     return json{
-        {"time", isoTimestamp(std::chrono::system_clock::now())},
-        {"uptimeSec", d->t},
-        {"demo", config_.demo},
-        {"hwTimestamp", config_.hwTimestamp},
-        {"ptpEnabled", config_.ptp},
+        {"id", config_.id},
+        {"label", config_.label},
+        {"kind", config_.video ? "video" : "audio"},
         {"video", config_.video ? videoSnapshot(*d, windowSec) : json(nullptr)},
         {"audio", config_.audio ? audioSnapshot(*d, windowSec) : json(nullptr)},
-        {"ptp", d->ptp.toJson(d->t, windowSec, kMaxSeriesPoints)},
-        {"counters",
-         {{"video", d->counters[0].any ? countersJson(d->counters[0].current) : json(nullptr)},
-          {"audio", d->counters[1].any ? countersJson(d->counters[1].current) : json(nullptr)}}},
-        {"events", events},
+        {"counters", d->counters.any ? countersJson(d->counters.current) : json(nullptr)},
+        {"rates", ratesJson(d->counters)},
     };
 }
 
-json Monitor::startRecord() {
+json FlowMonitor::takeIntervalRecord() {
     std::lock_guard lock(mutex_);
-    json video = nullptr;
-    if (config_.video) {
-        const auto& v = *config_.video;
-        json flows{{"P", flowToJson(v.primary)}};
-        if (v.redundant) {
-            flows["R"] = flowToJson(*v.redundant);
-        }
-        video = json{{"format", v.format.name()}, {"payloadType", v.payloadType}, {"flows", flows}};
-    }
-    json audio = nullptr;
-    if (config_.audio) {
-        const auto& a = *config_.audio;
-        json flows{{"P", flowToJson(a.primary)}};
-        if (a.redundant) {
-            flows["R"] = flowToJson(*a.redundant);
-        }
-        audio = json{{"format", a.format.name()}, {"payloadType", a.payloadType}, {"flows", flows}};
-    }
-    return json{{"type", "start"},      {"time", isoTimestamp(std::chrono::system_clock::now())},
-                {"demo", config_.demo}, {"hwTimestamp", config_.hwTimestamp},
-                {"ptp", config_.ptp},   {"video", video},
-                {"audio", audio}};
-}
-
-json Monitor::takeIntervalRecord() {
-    std::lock_guard lock(mutex_);
-    const double t = now() - startSec_;
-    checkPtpLocked(t);
-    json video = nullptr;
-    if (config_.video) {
-        json paths = json::object();
-        const size_t count = config_.video->redundant ? 2 : 1;
-        for (size_t i = 0; i < count; ++i) {
-            const Path path = static_cast<Path>(i);
-            json entry = statsToJson(video_[i].interval);
+    json paths = json::object();
+    const size_t count = config_.redundant() ? 2 : 1;
+    json out{{"label", config_.label},
+             {"kind", config_.video ? "video" : "audio"},
+             {"format", config_.formatName()}};
+    for (size_t i = 0; i < count; ++i) {
+        const Path path = static_cast<Path>(i);
+        json entry;
+        if (config_.video) {
+            entry = statsToJson(video_[i].interval);
+            video_[i].interval.reset();
             if (videoAnalyzer_) {
                 auto h = videoAnalyzer_->takeInterval(path);
                 entry["histograms"] = json{{"iptNs", histogramSummary(h.iptNs)},
                                            {"cinst", histogramSummary(h.cinst)},
                                            {"vrx", histogramSummary(h.vrx)}};
             }
-            paths[pathKey(path)] = entry;
-            video_[i].interval.reset();
-        }
-        video = json{{"frames", frameCountersToJson(framesInterval_)}, {"paths", paths}};
-        if (config_.video->redundant) {
-            video["skewNs"] = rangeToJson(videoSkew_.takeInterval());
-        }
-        framesInterval_ = FrameCounters{};
-    }
-    json audio = nullptr;
-    if (config_.audio) {
-        json paths = json::object();
-        const size_t count = config_.audio->redundant ? 2 : 1;
-        for (size_t i = 0; i < count; ++i) {
-            const Path path = static_cast<Path>(i);
-            json entry = audioStatsToJson(audio_[i].interval);
+        } else {
+            entry = audioStatsToJson(audio_[i].interval);
+            audio_[i].interval.reset();
             if (audioAnalyzer_) {
                 auto h = audioAnalyzer_->takeInterval(path);
                 entry["histograms"] =
                     json{{"dpvrUs", histogramSummary(h.dpvrUs)}, {"iptNs", histogramSummary(h.iptNs)}};
             }
-            paths[pathKey(path)] = entry;
-            audio_[i].interval.reset();
         }
-        audio = json{{"paths", paths}};
+        paths[pathKey(path)] = entry;
     }
-    json counters = json::object();
-    for (size_t i = 0; i < 2; ++i) {
-        if (counters_[i].any) {
-            counters[i == 0 ? "video" : "audio"] =
-                countersDelta(counters_[i].current, counters_[i].lastInterval);
-            counters_[i].lastInterval = counters_[i].current;
+    out["paths"] = paths;
+    if (config_.video) {
+        out["frames"] = frameCountersToJson(framesInterval_);
+        framesInterval_ = FrameCounters{};
+        if (config_.video->redundant) {
+            out["skewNs"] = rangeToJson(videoSkew_.takeInterval());
         }
     }
-    return json{{"type", "interval"},
-                {"time", isoTimestamp(std::chrono::system_clock::now())},
-                {"uptimeSec", t},
-                {"video", video},
-                {"audio", audio},
-                {"ptp",
-                 {{"state", ptpStateName(ptp_.state(t))},
-                  {"syncs", ptp_.syncCount()},
-                  {"deltaNs", rangeToJson(ptp_.takeInterval())}}},
-                {"counters", counters}};
+    if (counters_.any) {
+        out["counters"] = countersDelta(counters_.current, counters_.lastInterval);
+        counters_.lastInterval = counters_.current;
+    }
+    return out;
 }
 
-json Monitor::summaryRecord() {
+json FlowMonitor::summaryRecord() {
     std::lock_guard lock(mutex_);
-    const double t = now() - startSec_;
-    json video = nullptr;
-    if (config_.video) {
-        json paths = json::object();
-        const size_t count = config_.video->redundant ? 2 : 1;
-        for (size_t i = 0; i < count; ++i) {
-            const Path path = static_cast<Path>(i);
-            json entry = statsToJson(video_[i].total);
+    json paths = json::object();
+    const size_t count = config_.redundant() ? 2 : 1;
+    json out{{"label", config_.label},
+             {"kind", config_.video ? "video" : "audio"},
+             {"format", config_.formatName()}};
+    for (size_t i = 0; i < count; ++i) {
+        const Path path = static_cast<Path>(i);
+        json entry;
+        if (config_.video) {
+            entry = statsToJson(video_[i].total);
             if (videoAnalyzer_) {
                 const auto& h = videoAnalyzer_->totals(path);
                 entry["histograms"] = json{{"iptNs", histogramSummary(h.iptNs)},
                                            {"cinst", histogramSummary(h.cinst)},
                                            {"vrx", histogramSummary(h.vrx)}};
             }
-            paths[pathKey(path)] = entry;
-        }
-        video = json{{"frames", frameCountersToJson(framesTotal_)}, {"paths", paths}};
-        if (config_.video->redundant) {
-            video["skewNs"] = rangeToJson(videoSkew_.total());
-        }
-    }
-    json audio = nullptr;
-    if (config_.audio) {
-        json paths = json::object();
-        const size_t count = config_.audio->redundant ? 2 : 1;
-        for (size_t i = 0; i < count; ++i) {
-            json entry = audioStatsToJson(audio_[i].total);
+        } else {
+            entry = audioStatsToJson(audio_[i].total);
             if (audioAnalyzer_) {
-                const auto& h = audioAnalyzer_->totals(static_cast<Path>(i));
+                const auto& h = audioAnalyzer_->totals(path);
                 entry["histograms"] =
                     json{{"dpvrUs", histogramSummary(h.dpvrUs)}, {"iptNs", histogramSummary(h.iptNs)}};
             }
-            paths[pathKey(static_cast<Path>(i))] = entry;
         }
-        audio = json{{"paths", paths}};
+        paths[pathKey(path)] = entry;
     }
-    json counters = json::object();
-    for (size_t i = 0; i < 2; ++i) {
-        if (counters_[i].any) {
-            counters[i == 0 ? "video" : "audio"] = countersJson(counters_[i].current);
+    out["paths"] = paths;
+    if (config_.video) {
+        out["frames"] = frameCountersToJson(framesTotal_);
+        if (config_.video->redundant) {
+            out["skewNs"] = rangeToJson(videoSkew_.total());
         }
     }
-    return json{{"type", "summary"},
-                {"time", isoTimestamp(std::chrono::system_clock::now())},
-                {"durationSec", t},
-                {"video", video},
-                {"audio", audio},
-                {"ptp",
-                 {{"state", ptpStateName(ptp_.state(t))},
-                  {"syncs", ptp_.syncCount()},
-                  {"deltaNs", rangeToJson(ptp_.totalDelta())}}},
-                {"counters", counters}};
+    if (counters_.any) {
+        out["counters"] = countersJson(counters_.current);
+    }
+    return out;
 }
 
-uint64_t Monitor::videoFrames() const {
-    std::lock_guard lock(mutex_);
-    uint64_t frames = framesTotal_.total();
-    return std::max(frames, video_[0].total.frames());
+bool FlowMonitor::matches(const std::string& ip, uint16_t port) const {
+    auto hit = [&](const FlowAddress& a) { return a.ip == ip && a.udpPort == port; };
+    return hit(config_.primary()) || (config_.redundant() && hit(*config_.redundant()));
 }
 
-uint64_t Monitor::audioPeriods() const {
+uint64_t FlowMonitor::received() const {
     std::lock_guard lock(mutex_);
+    if (config_.video) {
+        return std::max(framesTotal_.total(), video_[0].total.frames());
+    }
     return audio_[0].total.periods() + audio_[1].total.periods();
 }
 

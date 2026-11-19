@@ -1,9 +1,10 @@
 # ST2110 – Messplatz für SMPTE ST 2110
 
-`st2110-monitor` empfängt ST-2110-Ströme unter Linux mit der
+`st2110-monitor` empfängt ST-2110-Flows unter Linux mit der
 [Intel Media Transport Library (MTL)](https://github.com/OpenVisualCloud/Media-Transport-Library) und
 bewertet sie wie ein Broadcast-Messgerät: Video-Timing nach ST 2110-21, Ton nach ST 2110-30, PTP und
-ST 2022-7, mit Web-Oberfläche und JSON-Berichten. Einsatz: Studio und Lehre an der Hochschule Düsseldorf
+ST 2022-7 für **mehrere Flows gleichzeitig**, dazu die **Erkennung aller Flows im Netz** mit Adressen,
+Datenraten und geschätztem Format, mit Web-Oberfläche und JSON-Berichten. Einsatz: Studio und Lehre an der Hochschule Düsseldorf
 (HSD), Inbetriebnahme von ST-2110-Geräten, Vorarbeit für ST 2110 im
 [Studio-Gateway](https://github.com/raindropmedia/studio-gateway).
 
@@ -11,7 +12,7 @@ ST 2022-7, mit Web-Oberfläche und JSON-Berichten. Einsatz: Studio und Lehre an 
 gegen MTL v26.09 mit eigenem Patch, ist aber **noch nicht auf einer Karte gelaufen**. Messwerte gelten erst
 nach dem Abgleich mit EBU LIST als belastbar (`docs/MESSUNGEN.md`).
 
-![Übersicht](docs/bilder/uebersicht.png)
+![Flows](docs/bilder/flows.png)
 
 ## Funktionen
 
@@ -19,7 +20,8 @@ Angelehnt an die Ansichten von Telestream PRISM und Phabrix QxL, soweit MTL die 
 
 | Ansicht | Inhalt |
 | --- | --- |
-| Übersicht | Kacheln je Pfad mit Urteil narrow/wide/failed, Cinst, VRX, FPT, Latenz, RTP-Offset, IPT; Ton DPVR/TSDF; PTP; 2022-7; Verluste; Verläufe |
+| Flows | **Überwachte Flows** (Name, Art, Format, Ziel P/R, Quelle, PT, Datenrate P/R, Pakete/s, Verlust, Urteil; anzeigen, entfernen, hinzufügen per Angabe oder SDP), **im Netz erkannte Flows** (Ziel, Quelle, Art, geschätztes Format, PT, SSRC, Datenrate, Pakete/s, Sequenzfehler, DSCP, VLAN; per Klick überwachen), **per SAP angekündigte Sitzungen** |
+| Übersicht | für den in der Kopfzeile gewählten Flow: Kacheln je Pfad mit Urteil narrow/wide/failed, Cinst, VRX, FPT, Latenz, RTP-Offset, IPT; Ton DPVR/TSDF; PTP; 2022-7; Verluste; Verläufe |
 | Video ST 2110-21 | **Interpacket-Timing-Histogramm** (IPT, Sollwert TRS), Cinst- und VRX-Histogramm mit narrow/wide-Grenzen, Verläufe je Bild (Cinst, VRX, FPT, Latenz, RTP-Offset, IPT max), Kenngrößen und Grenzwerte, Fehlerursachen |
 | Paketprofil | Ankunft **jedes Pakets** eines Bildes gegen die Sollzeit TR_OFFSET + (i+1)·TRS, Cinst und VRX über dem Bild, Ankunftsverlauf; letztes oder schlechtestes Bild |
 | Ton ST 2110-30 | DPVR- und IPT-Histogramm, DPVR und TSDF je 200 ms mit Grenzen |
@@ -28,9 +30,16 @@ Angelehnt an die Ansichten von Telestream PRISM und Phabrix QxL, soweit MTL die 
 | Pakete | Pakete, Rate, Datenrate, Verluste, Umordnung, Duplikate, falsche Payload-Typen/SSRC je Pfad |
 | Ereignisse | Urteilswechsel, PTP-Zustand, Paketverluste, beschädigte Bilder mit Zeitstempel |
 
-Weitere Funktionen: SDP-Import (`--sdp`, auch DUP-Gruppen für 2022-7), JSON-Lines-Berichte je Intervall
+Alle Ansichten außer „Flows“, „PTP“ und „Ereignisse“ zeigen nur den gewählten Flow; was zur Art des
+Flows nicht passt (z. B. Paketprofil bei Ton), ist ausgegraut. Auswahl und Ansicht stehen in der Adresse
+(`#tab=video&flow=v1`), Links lassen sich also weitergeben.
+
+Weitere Funktionen: SDP-Import (`--sdp`, alle Medien, DUP-Gruppen ergeben P und R), JSON-Lines-Berichte je Intervall
 und als Zusammenfassung, Zurücksetzen und Anhalten der Anzeige, **Demo-Betrieb ohne Karte** mit
-umschaltbaren Störungen (Jitter, Bündel, zu spät, Verlust, Pfadversatz, Ton-Jitter, PTP unruhig) für die Lehre.
+umschaltbaren Störungen (Jitter, Bündel, zu spät, Verlust, Pfadversatz, Ton-Jitter, PTP unruhig) für die Lehre;
+die Demo simuliert auch weitere Flows im Netz, PTP-Pakete, Zusatzdaten und SAP-Ankündigungen.
+
+![Flow-Übersicht](docs/bilder/flow-uebersicht.png)
 
 | Bündel (wide) im Video-Timing | Paketprofil des schlechtesten Bildes |
 | --- | --- |
@@ -65,12 +74,22 @@ cmake --preset release && cmake --build --preset release && sudo cmake --install
 ```bash
 sudo st2110-monitor --port 0000:af:00.0 --local-ip 192.168.100.10 \
      --red-port 0000:af:00.1 --red-local-ip 192.168.101.10 \
-     --sdp config/local/kamera.sdp --http 0.0.0.0:8090 --output config/local/messung.jsonl
+     --sdp config/local/kamera1.sdp --sdp config/local/pult.sdp \
+     --video 239.100.0.11:20000,format=1920x1080i50,name=Kamera 2 \
+     --discover eno1 --http 0.0.0.0:8090 --output config/local/messung.jsonl
 ```
 
-Oder ohne SDP: `--video 239.100.0.1:20000 --video-format 1920x1080p50 --audio 239.100.0.2:30000
---audio-format L24/48000/2 --audio-ptime 1`. `--help` zeigt alle Optionen. 1080i50 ist
-`--video-format 1920x1080i50` (Halbbilder je Sekunde, Höhe 1080).
+Flows: `--video ip:port[,red=ip:port][,format=1920x1080p50][,pt=96][,source=ip][,red-source=ip][,name=Text]`
+und `--audio ip:port[,red=…][,format=L24/48000/2][,ptime=1][,pt=97][,source=…][,name=…]`, beliebig oft;
+`--sdp` übernimmt alle Video- und Tonmedien. Weitere Flows zur Laufzeit über die Oberfläche
+(höchstens `--max-flows`, Vorgabe 8). 1080i50 ist `format=1920x1080i50` (Halbbilder je Sekunde).
+`--help` zeigt alle Optionen.
+
+**Erkennung:** `--discover <schnittstelle>` liest auf einer **Kernel**-Schnittstelle alle UDP/RTP-Flows mit
+und empfängt SAP. Die Karte im DPDK-Betrieb sieht nur abonnierte Flows; für die Erkennung deshalb eine
+eigene Schnittstelle an einem Spiegelport (oder ohne IGMP-Snooping) vorsehen
+([ADR 0005](docs/adr/0005-mehrere-flows-und-erkennung.md)). Braucht CAP_NET_RAW. Ohne `--port` läuft das
+Programm als **reiner Netz-Scanner**, auch ohne MTL: `sudo st2110-monitor --discover eno1`.
 
 **Aussagekraft:** Nur mit Hardware-Zeitstempeln und PTP (beides Vorgabe) sind die Werte belastbar.
 `--no-hw-timestamp`, `--no-ptp` und `kernel:`-Ports dienen nur als Funktionstest; die Oberfläche warnt dann.
@@ -83,7 +102,7 @@ Oder ohne SDP: `--video 239.100.0.1:20000 --video-format 1920x1080p50 --audio 23
 | `type` | Inhalt |
 | --- | --- |
 | `start` | Formate, Adressen, Hardware-Zeitstempel und PTP an/aus |
-| `interval` | je Intervall: Video je Pfad (Urteil, Zähler, Min/Mittel/Max, Histogramm-Kurzform p50/p99/max), Pfadversatz, Ton je Pfad, PTP, Zähleränderungen |
+| `interval` | je Intervall und Flow (`flows.<id>`): je Pfad Urteil, Zähler, Min/Mittel/Max, Histogramm-Kurzform p50/p99/max, Pfadversatz, Zähleränderungen; dazu PTP |
 | `summary` | dasselbe über die ganze Messung |
 
 `--output -` schaltet die Berichte ab. Rückgabewerte: 0 = empfangen, 1 = Optionen fehlerhaft,
@@ -94,7 +113,10 @@ Oder ohne SDP: `--video 239.100.0.1:20000 --video-format 1920x1080p50 --audio 23
 | Aufruf | Zweck |
 | --- | --- |
 | `GET /api/info` | Programmstand, Paket-Rückruf vorhanden, Demo |
-| `GET /api/snapshot?window=60` | alle Werte, Histogramme, Verläufe, Profile, Ereignisse |
+| `GET /api/flows` | überwachte, erkannte und per SAP angekündigte Flows, Status der Erkennung |
+| `POST /api/flows` | Flow überwachen: `{"kind":"video","spec":"239.1.1.1:20000,format=1920x1080p50"}`, `{"sdp":"v=0…"}` oder `{"sap":"<schlüssel>"}` |
+| `DELETE /api/flows/<id>` | Flow nicht mehr überwachen |
+| `GET /api/snapshot?flow=v1&window=60` | Werte, Histogramme, Verläufe und Profile eines Flows, PTP, Ereignisse, Flow-Liste |
 | `POST /api/reset` | Messwerte zurücksetzen |
 | `GET/POST /api/demo` | Störung der Demo abfragen bzw. setzen (`{"preset": "burst"}`) |
 

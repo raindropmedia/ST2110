@@ -40,6 +40,34 @@ struct AudioFlow {
     uint8_t payloadType = 97;
 };
 
+enum class Media { Video, Audio };
+
+// Ein überwachter Flow: genau eines von video/audio ist gesetzt.
+struct FlowConfig {
+    std::string id;    // kurz und eindeutig, z. B. "v1", "a2" (leer: vergibt der Hub)
+    std::string label; // Anzeige, z. B. "Kamera 1"
+    std::optional<VideoFlow> video;
+    std::optional<AudioFlow> audio;
+
+    Media media() const { return video ? Media::Video : Media::Audio; }
+    std::string formatName() const;
+    const FlowAddress& primary() const { return video ? video->primary : audio->primary; }
+    const std::optional<FlowAddress>& redundant() const {
+        return video ? video->redundant : audio->redundant;
+    }
+    uint8_t payloadType() const { return video ? video->payloadType : audio->payloadType; }
+};
+
+// Beschreibung eines Flows wie auf der Kommandozeile: "ip:port[,schlüssel=wert…]".
+// Video: red, format, pt, source, red-source, name. Ton: red, format (L24/48000/2), ptime, pt, source,
+// red-source, name. Liefert false und eine Fehlermeldung bei ungültigen Angaben.
+bool parseFlowSpec(Media media, const std::string& text, FlowConfig& flow, std::string& error);
+// Alle Video- und Tonmedien einer SDP-Beschreibung (DUP-Gruppen ergeben P und R).
+std::vector<FlowConfig> flowsFromSdp(const std::string& sdpText, std::vector<std::string>& errors);
+// Prüft einen Flow (Adressen, Format, Payload-Typ); Meldungen mit dem Namen des Flows.
+void validateFlow(const FlowConfig& flow, std::vector<std::string>& errors,
+                  std::vector<std::string>& warnings);
+
 enum class LogLevel { Debug, Info, Notice, Warning, Error };
 
 // Optionen des Messprogramms st2110-monitor.
@@ -49,8 +77,14 @@ struct Options {
 
     PortOptions primaryPort;
     std::optional<PortOptions> redundantPort;
-    std::optional<VideoFlow> video;
-    std::optional<AudioFlow> audio;
+    std::vector<FlowConfig> flows;
+    // Höchstzahl gleichzeitig überwachter Flows (MTL reserviert dafür Empfangs-Queues).
+    unsigned maxFlows = 8;
+
+    // Flow-Erkennung: Kernel-Schnittstelle, deren Pakete mitgelesen werden (leer = aus), und
+    // SAP-Ankündigungen auf derselben Schnittstelle.
+    std::string discoverInterface;
+    bool sap = true;
 
     // Hardware-Zeitstempel der Karte für jedes empfangene Paket (MTL_FLAG_ENABLE_HW_TIMESTAMP).
     bool hwTimestamp = true;

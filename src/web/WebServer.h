@@ -1,6 +1,7 @@
 #pragma once
 
-#include "core/Monitor.h"
+#include "core/FlowController.h"
+#include "core/MonitorHub.h"
 
 #include <functional>
 #include <memory>
@@ -16,9 +17,13 @@ class Server;
 namespace st2110 {
 
 // Web-Oberfläche: liefert die statischen Dateien aus webuiDir und eine JSON-API.
-//   GET  /api/info              Programmstand, Fähigkeiten
-//   GET  /api/snapshot?window=s Messwerte, Histogramme, Verläufe, Ereignisse
-//   POST /api/reset             Messwerte zurücksetzen
+//   GET    /api/info                     Programmstand, Fähigkeiten
+//   GET    /api/flows                    überwachte, erkannte und angekündigte Flows
+//   POST   /api/flows                    Flow überwachen: {"kind": "video"|"audio", "spec": "ip:port,…"},
+//                                        {"sdp": "v=0…"} oder {"sap": "<schlüssel>"}
+//   DELETE /api/flows/<id>               Flow nicht mehr überwachen
+//   GET    /api/snapshot?flow=v1&window=s Werte eines Flows, PTP, Ereignisse, Flow-Liste
+//   POST   /api/reset                    Messwerte zurücksetzen
 //   GET  /api/demo              Störungen der Demo (nur mit --demo)
 //   POST /api/demo              {"preset": "burst"}
 // Ohne Anmeldung: nur im Messnetz bzw. auf 127.0.0.1 betreiben.
@@ -30,7 +35,8 @@ class WebServer {
         std::function<bool(const std::string&)> set;
     };
 
-    WebServer(Monitor& monitor, nlohmann::json info, std::string webuiDir, std::optional<DemoControl> demo);
+    WebServer(MonitorHub& hub, FlowController* controller, nlohmann::json info, std::string webuiDir,
+              std::optional<DemoControl> demo);
     ~WebServer();
     WebServer(const WebServer&) = delete;
     WebServer& operator=(const WebServer&) = delete;
@@ -40,7 +46,8 @@ class WebServer {
     void stop();
 
   private:
-    Monitor& monitor_;
+    MonitorHub& hub_;
+    FlowController* controller_;
     nlohmann::json info_;
     std::string webuiDir_;
     std::optional<DemoControl> demo_;

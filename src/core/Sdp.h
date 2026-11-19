@@ -7,6 +7,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace st2110 {
@@ -72,5 +73,11 @@ struct SdpAudio {
 // Liefert nichts, wenn das Medium fehlt; Fehler im Medium landen in error.
 std::optional<SdpVideo> sdpVideo(const SdpSession& session, std::string& error);
 std::optional<SdpAudio> sdpAudio(const SdpSession& session, std::string& error);
+
+// Ein Medium (und optional sein redundantes Gegenstück) umwandeln.
+std::optional<SdpVideo> sdpVideoFrom(const SdpMedia& media, const SdpMedia* redundant, std::string& error);
+std::optional<SdpAudio> sdpAudioFrom(const SdpMedia& media, const SdpMedia* redundant, std::string& error);
+// Alle Medien der Sitzung; das zweite Medium einer DUP-Gruppe erscheint als Partner des ersten.
+std::vector<std::pair<const SdpMedia*, const SdpMedia*>> sdpMediaPairs(const SdpSession& session);
 
 } // namespace st2110

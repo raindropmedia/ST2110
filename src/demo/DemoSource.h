@@ -1,10 +1,12 @@
 #pragma once
 
-#include "core/Monitor.h"
+#include "core/FlowController.h"
+#include "core/MonitorHub.h"
 #include "core/Options.h"
 #include "core/SyntheticSender.h"
 
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -12,9 +14,10 @@
 
 namespace st2110 {
 
-// Synthetische Ströme ohne Karte: erzeugt Pakete in Echtzeit (Zeitbasis Systemuhr als TAI) und
-// speist sie in den Monitor. Störungen lassen sich während des Laufs umschalten (Lehre, Vorführung).
-class DemoSource {
+// Synthetische Flows ohne Karte: erzeugt Pakete in Echtzeit (Zeitbasis Systemuhr als TAI) und speist
+// sie in die Flows des Hubs. Dazu simuliert sie die Erkennung (weitere Flows im Netz, PTP, Zusatzdaten)
+// und SAP-Ankündigungen. Störungen lassen sich während des Laufs umschalten (Lehre, Vorführung).
+class DemoSource : public FlowController {
   public:
     struct Preset {
         std::string id;
@@ -22,34 +25,46 @@ class DemoSource {
         std::string description;
     };
 
-    DemoSource(const Options& options, Monitor& monitor);
-    ~DemoSource();
+    DemoSource(const Options& options, MonitorHub& hub);
+    ~DemoSource() override;
     DemoSource(const DemoSource&) = delete;
     DemoSource& operator=(const DemoSource&) = delete;
+
+    std::string addFlow(const FlowConfig& flow, std::string& error) override;
+    bool removeFlow(const std::string& id, std::string& error) override;
 
     static const std::vector<Preset>& presets();
     bool setPreset(const std::string& id);
     std::string preset() const;
 
   private:
+    struct Generator {
+        std::shared_ptr<FlowMonitor> monitor; // leer: nur im Netz sichtbar (Erkennung)
+        FlowConfig config;
+        std::unique_ptr<SyntheticSender> senderP;
+        std::unique_ptr<SyntheticSender> senderR;
+        uint64_t next = 0; // nächste Epoche (Bild bzw. Tonpaket)
+        bool started = false;
+        StreamCounters counters;
+        uint16_t sequence = 0;
+    };
+
     void run();
-    void emitVideo(uint64_t frame, const SenderFaults& faults);
-    void emitAudio(uint64_t packet, const SenderFaults& faults);
+    void emitVideo(Generator& g, uint64_t frame, const SenderFaults& faults);
+    void emitAudio(Generator& g, uint64_t packet, const SenderFaults& faults);
+    void discoverVideo(const Generator& g, uint64_t frame, bool redundant, double skewNs);
+    void discoverAudio(Generator& g, uint64_t firstPacket, uint32_t count);
+    void announce();
+    std::unique_ptr<Generator> makeGenerator(const FlowConfig& config, std::shared_ptr<FlowMonitor> monitor);
 
-    Options options_;
-    Monitor& monitor_;
-    SyntheticSender videoP_;
-    SyntheticSender videoR_;
-    SyntheticSender audioP_;
-    SyntheticSender audioR_;
+    MonitorHub& hub_;
     double ptpNoiseNs_ = 25;
-
-    mutable std::mutex mutex_;
+    mutable std::mutex mutex_; // schützt preset_, faults_, generators_
     std::string preset_ = "ideal";
     SenderFaults faults_;
-
-    StreamCounters videoCounters_;
-    StreamCounters audioCounters_;
+    std::vector<std::unique_ptr<Generator>> generators_;
+    std::vector<FlowConfig> background_; // nur zur Erkennung
+    uint64_t seed_ = 11;
     std::atomic<bool> stop_{false};
     std::thread thread_;
 };
