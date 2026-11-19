@@ -41,6 +41,7 @@
     <nav class="tabs" id="tabs" aria-label="Ansichten">
       <button data-tab="flows" class="active">Flows</button>
       <button data-tab="overview">Übersicht</button>
+      <button data-tab="preview">Vorschau</button>
       <button data-tab="video">Video ST 2110-21</button>
       <button data-tab="profile">Paketprofil</button>
       <button data-tab="audio">Ton ST 2110-30</button>
@@ -120,6 +121,39 @@
           <figure class="card"><figcaption id="ovCap3">–</figcaption><canvas data-chart="ov3"></canvas></figure>
           <figure class="card"><figcaption>PTP-Korrektur je Sync (ns)</figcaption><canvas data-chart="ovPtp"></canvas></figure>
         </div>
+      </section>
+
+      <!-- Vorschau -->
+      <section data-view="preview" class="view">
+        <div class="card" id="videoPreviewCard" hidden>
+          <div class="card-head">
+            <h3>Bild <span class="hint" id="videoPreviewInfo"></span></h3>
+            <div class="inline-controls">
+              <label class="ctl">Bilder/s
+                <select id="previewFps"><option value="1">1</option><option value="2">2</option><option value="5" selected>5</option></select>
+              </label>
+              <button id="previewFullscreen" type="button" class="btn small">Vollbild</button>
+            </div>
+          </div>
+          <div class="preview-frame" id="previewFrame">
+            <canvas id="previewCanvas" aria-label="Vorschaubild des gewählten Videoflows"></canvas>
+            <div class="preview-overlay" id="previewOverlay"></div>
+          </div>
+          <p class="note">Verkleinerte Vorschau (höchstens 480 Pixel breit, bis 5 Bilder/s) zur Kontrolle des Inhalts, nicht zur Bildbeurteilung. Nur solange diese Ansicht offen ist, wandelt das Messgerät Bilder um.</p>
+        </div>
+        <div class="card" id="audioPreviewCard" hidden>
+          <div class="card-head">
+            <h3>Ton <span class="hint" id="audioPreviewInfo"></span></h3>
+            <div class="inline-controls">
+              <button id="listenBtn" type="button" class="btn primary">Anhören</button>
+              <label class="ctl">Kanäle <select id="pairSelect"></select></label>
+              <label class="ctl">Lautstärke <input type="range" id="volume" min="0" max="1" step="0.01" value="0.5"></label>
+            </div>
+          </div>
+          <div class="meters" id="meters"></div>
+          <p class="note">Pegel: Spitzenwert in dBFS je Kanal (Abfrage alle 150 ms, Halt 2 s); Bezugspegel −18 dBFS. Wiedergabe des gewählten Kanalpaars mit etwa 0,3 s Verzögerung.</p>
+        </div>
+        <div class="card" id="noPreview" hidden><p class="empty">Kein Flow gewählt.</p></div>
       </section>
 
       <!-- Video -->

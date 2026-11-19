@@ -47,6 +47,7 @@ class DemoSource : public FlowController {
         bool started = false;
         StreamCounters counters;
         uint16_t sequence = 0;
+        std::vector<float> toneBuffer;
     };
 
     void run();
@@ -55,6 +56,8 @@ class DemoSource : public FlowController {
     void discoverVideo(const Generator& g, uint64_t frame, bool redundant, double skewNs);
     void discoverAudio(Generator& g, uint64_t firstPacket, uint32_t count);
     void announce();
+    void previewVideo(Generator& g, int index, const SenderFaults& faults);
+    void previewAudio(Generator& g, uint64_t firstPacket, uint64_t packets);
     std::unique_ptr<Generator> makeGenerator(const FlowConfig& config, std::shared_ptr<FlowMonitor> monitor);
 
     MonitorHub& hub_;

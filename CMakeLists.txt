@@ -24,6 +24,7 @@ add_library(st2110_core STATIC
     src/core/FlowTable.cpp
     src/core/MonitorHub.cpp
     src/core/PacketParser.cpp
+    src/core/Preview.cpp
     src/core/Options.cpp
     src/core/PtpMonitor.cpp
     src/core/Report.cpp

@@ -90,6 +90,7 @@ FlowMonitor::FlowMonitor(FlowConfig config, EventSink sink, Clock clock)
     }
     if (config_.audio) {
         audioAnalyzer_ = std::make_unique<AudioPacketAnalyzer>(config_.audio->format);
+        audioPreview_.configure(config_.audio->format.sampleRate, config_.audio->format.channels);
     }
     for (auto& p : video_) {
         for (TimeSeries* s :

@@ -74,6 +74,7 @@
     document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.dataset.view === tab));
     if (tab === 'events') { state.seenEvents = state.lastEventCount; $('eventBadge').textContent = ''; }
     if (tab === 'flows') pollFlows();
+    if (tab !== 'preview') leavePreview();
     writeHash();
     render();
   }
@@ -215,6 +216,7 @@
     switch (state.tab) {
       case 'flows': renderFlows(); break;
       case 'overview': renderOverview(s); break;
+      case 'preview': renderPreviewCards(s); break;
       case 'video': renderVideo(s); break;
       case 'profile': renderProfile(s); break;
       case 'audio': renderAudio(s); break;
@@ -695,7 +697,7 @@
     const kind = s.flow ? s.flow.kind : null;
     const allowed = {
       flows: true, ptp: true, events: true,
-      overview: !!kind, counters: !!kind, redundancy: !!kind,
+      overview: !!kind, counters: !!kind, redundancy: !!kind, preview: !!kind,
       video: kind === 'video', profile: kind === 'video', audio: kind === 'audio',
     };
     document.querySelectorAll('#tabs button[data-tab]').forEach(b => {
@@ -871,6 +873,201 @@
       postFlow({ sap: btn.dataset.key });
     }
   });
+
+  // ---------- Vorschau ----------
+  const preview = {
+    timer: null, audioTimer: null, flowKey: '', ctx: null, gain: null, listening: false,
+    nextTime: 0, from: 0, holds: [], holdUntil: [], lastSeq: 0, offscreen: document.createElement('canvas'),
+  };
+
+  function renderPreviewCards(s) {
+    const kind = s.flow ? s.flow.kind : null;
+    $('videoPreviewCard').hidden = kind !== 'video';
+    $('audioPreviewCard').hidden = kind !== 'audio';
+    $('noPreview').hidden = !!kind;
+    const key = `${state.tab}|${state.flowId}|${kind}`;
+    if (key !== preview.flowKey) {
+      preview.flowKey = key;
+      restartPreview(kind, s);
+    }
+  }
+
+  function restartPreview(kind, s) {
+    clearInterval(preview.timer);
+    clearInterval(preview.audioTimer);
+    preview.timer = preview.audioTimer = null;
+    stopListening();
+    preview.from = 0;
+    preview.lastSeq = 0;
+    if (state.tab !== 'preview') return;
+    if (kind === 'video') {
+      $('videoPreviewInfo').textContent = `${s.flow.label} · ${s.video.format}`;
+      const fps = +$('previewFps').value;
+      fetchFrame();
+      preview.timer = setInterval(fetchFrame, 1000 / fps);
+    } else if (kind === 'audio') {
+      $('audioPreviewInfo').textContent = `${s.flow.label} · ${s.audio.format}`;
+      buildMeters(s.audio.format);
+      fetchAudio();
+      preview.audioTimer = setInterval(fetchAudio, 150);
+    }
+  }
+
+  // Die Ansicht verlassen beendet die Vorschau (das Messgerät hört 3 s nach der letzten Abfrage auf).
+  function leavePreview() {
+    preview.flowKey = '';
+    restartPreview(null);
+  }
+
+  $('previewFps').addEventListener('change', () => { preview.flowKey = ''; render(); });
+  $('previewFullscreen').addEventListener('click', () => {
+    const el = $('previewFrame');
+    if (document.fullscreenElement) document.exitFullscreen(); else if (el.requestFullscreen) el.requestFullscreen();
+  });
+
+  async function fetchFrame() {
+    const id = state.flowId;
+    try {
+      const res = await fetch(`api/preview/video?flow=${encodeURIComponent(id)}`, { cache: 'no-store' });
+      if (id !== state.flowId) return;
+      const overlay = $('previewOverlay');
+      if (res.status === 204) { overlay.textContent = 'warte auf erstes Bild …'; return; }
+      if (!res.ok) { overlay.textContent = 'keine Vorschau'; return; }
+      const w = +res.headers.get('X-Preview-Width');
+      const h = +res.headers.get('X-Preview-Height');
+      const seq = +res.headers.get('X-Preview-Sequence');
+      const age = +res.headers.get('X-Preview-Age-Ms');
+      const rgb = new Uint8Array(await res.arrayBuffer());
+      if (rgb.length < w * h * 3) return;
+      const off = preview.offscreen;
+      off.width = w; off.height = h;
+      const octx = off.getContext('2d');
+      const img = octx.createImageData(w, h);
+      for (let i = 0, j = 0; i < w * h; i++, j += 3) {
+        img.data[i * 4] = rgb[j]; img.data[i * 4 + 1] = rgb[j + 1]; img.data[i * 4 + 2] = rgb[j + 2]; img.data[i * 4 + 3] = 255;
+      }
+      octx.putImageData(img, 0, 0);
+      const canvas = $('previewCanvas');
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.round(canvas.clientWidth * dpr);
+      canvas.height = Math.round(canvas.clientHeight * dpr);
+      const c = canvas.getContext('2d');
+      c.fillStyle = '#000';
+      c.fillRect(0, 0, canvas.width, canvas.height);
+      const scale = Math.min(canvas.width / w, canvas.height / h);
+      const dw = w * scale, dh = h * scale;
+      c.imageSmoothingEnabled = true;
+      c.drawImage(off, (canvas.width - dw) / 2, (canvas.height - dh) / 2, dw, dh);
+      const stale = seq === preview.lastSeq || age > 1500;
+      preview.lastSeq = seq;
+      overlay.className = 'preview-overlay' + (stale ? ' stale' : '');
+      overlay.textContent = `${state.snap && state.snap.flow ? state.snap.flow.label : ''} · ${w}×${h} · Bild ${seq} · Alter ${fmt(age, 0)} ms${stale ? ' · kein neues Bild' : ''}`;
+    } catch (_) { /* nächster Versuch */ }
+  }
+
+  const dbToPct = (db) => Math.max(0, Math.min(100, (db + 60) / 60 * 100));
+
+  function buildMeters(format) {
+    const channels = +((format.match(/\/(\d+) /) || [])[1] || 2);
+    const sel = $('pairSelect');
+    const pairs = Math.ceil(channels / 2);
+    const keep = sel.value;
+    sel.innerHTML = Array.from({ length: pairs }, (_, i) =>
+      `<option value="${i}">${channels === 1 ? '1' : `${i * 2 + 1}/${Math.min(i * 2 + 2, channels)}`}</option>`).join('');
+    if (keep && +keep < pairs) sel.value = keep;
+    preview.holds = new Array(channels).fill(-120);
+    preview.holdUntil = new Array(channels).fill(0);
+    const scale = [0, -9, -18, -30, -40, -60].map(db =>
+      `<span style="bottom:${dbToPct(db)}%">${db === 0 ? '0' : '−' + Math.abs(db)}</span>`).join('');
+    $('meters').innerHTML = `<div class="meter scale"><span class="val">dBFS</span><div class="scalebar">${scale}</div><span class="ch">&nbsp;</span></div>` +
+      Array.from({ length: channels }, (_, i) =>
+      `<div class="meter" data-ch="${i}"><span class="val">–</span><div class="barwrap"><div class="bar"></div>` +
+      `<div class="fill-wrap"><div class="fill" style="height:0%"></div><div class="hold" style="bottom:0%"></div></div></div>` +
+      `<span class="ch">${i + 1}</span></div>`).join('');
+    markSelectedPair();
+  }
+
+  function markSelectedPair() {
+    const pair = +$('pairSelect').value;
+    document.querySelectorAll('#meters .meter[data-ch]').forEach(m => {
+      const ch = +m.dataset.ch;
+      m.classList.toggle('selected', ch === pair * 2 || ch === pair * 2 + 1);
+    });
+  }
+
+  function updateMeters(peaks) {
+    const now = performance.now();
+    document.querySelectorAll('#meters .meter[data-ch]').forEach(m => {
+      const ch = +m.dataset.ch;
+      const db = peaks[ch] ?? -120;
+      if (db >= preview.holds[ch] || now > preview.holdUntil[ch]) {
+        preview.holds[ch] = db;
+        preview.holdUntil[ch] = now + 2000;
+      }
+      m.querySelector('.fill').style.height = dbToPct(db) + '%';
+      m.querySelector('.hold').style.bottom = dbToPct(preview.holds[ch]) + '%';
+      m.querySelector('.val').textContent = preview.holds[ch] <= -100 ? '−∞' : fmt(preview.holds[ch], 1);
+    });
+  }
+
+  async function fetchAudio() {
+    const id = state.flowId;
+    const pair = +$('pairSelect').value || 0;
+    try {
+      const res = await fetch(`api/preview/audio?flow=${encodeURIComponent(id)}&from=${preview.from}&pair=${pair}`, { cache: 'no-store' });
+      if (id !== state.flowId || !res.ok) return;
+      const start = +res.headers.get('X-Audio-Start');
+      const frames = +res.headers.get('X-Audio-Frames');
+      const rate = +res.headers.get('X-Audio-Rate');
+      const peaks = (res.headers.get('X-Audio-Peaks') || '').split(',').map(Number);
+      const data = new Int16Array(await res.arrayBuffer());
+      updateMeters(peaks);
+      if (frames > 0) preview.from = start + frames;
+      if (preview.listening && frames > 0) playChunk(data, frames, rate);
+    } catch (_) { /* nächster Versuch */ }
+  }
+
+  function playChunk(data, frames, rate) {
+    const ctx = preview.ctx;
+    const buffer = ctx.createBuffer(2, frames, rate);
+    const l = buffer.getChannelData(0), r = buffer.getChannelData(1);
+    for (let i = 0; i < frames; i++) { l[i] = data[i * 2] / 32768; r[i] = data[i * 2 + 1] / 32768; }
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(preview.gain);
+    // Abspielzeitpunkt fortschreiben; bei Lücken oder Rückstand neu mit 0,3 s Vorlauf beginnen.
+    if (preview.nextTime < ctx.currentTime + 0.05 || preview.nextTime > ctx.currentTime + 1.0) {
+      preview.nextTime = ctx.currentTime + 0.3;
+    }
+    src.start(preview.nextTime);
+    preview.nextTime += frames / rate;
+  }
+
+  function startListening() {
+    if (!preview.ctx) {
+      preview.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      preview.gain = preview.ctx.createGain();
+      preview.gain.connect(preview.ctx.destination);
+    }
+    preview.ctx.resume();
+    preview.gain.gain.value = +$('volume').value;
+    preview.listening = true;
+    preview.nextTime = 0;
+    preview.from = 0; // mit aktuellem Ton beginnen
+    $('listenBtn').textContent = 'Stumm';
+    $('listenBtn').classList.add('on');
+  }
+
+  function stopListening() {
+    preview.listening = false;
+    if (preview.ctx) preview.ctx.suspend();
+    $('listenBtn').textContent = 'Anhören';
+    $('listenBtn').classList.remove('on');
+  }
+
+  $('listenBtn').addEventListener('click', () => { if (preview.listening) stopListening(); else startListening(); });
+  $('volume').addEventListener('input', (e) => { if (preview.gain) preview.gain.gain.value = +e.target.value; });
+  $('pairSelect').addEventListener('change', () => { markSelectedPair(); preview.from = 0; preview.nextTime = 0; });
 
   init();
 })();

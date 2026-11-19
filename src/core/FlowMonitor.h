@@ -2,6 +2,7 @@
 
 #include "core/AudioPacketAnalyzer.h"
 #include "core/Options.h"
+#include "core/Preview.h"
 #include "core/PtpMonitor.h"
 #include "core/TimeSeries.h"
 #include "core/TimingStats.h"
@@ -93,6 +94,11 @@ class FlowMonitor {
     // Empfangene Bilder bzw. Ton-Zeiträume (Rückgabewert des Programms).
     uint64_t received() const;
 
+    // Vorschau (eigene Sperren, unabhängig von den Messwerten). Zeitbasis: clockNow().
+    VideoPreview& videoPreview() { return videoPreview_; }
+    AudioPreview& audioPreview() { return audioPreview_; }
+    double clockNow() const { return clock_(); }
+
   private:
     struct VideoPath {
         TimingStats interval;
@@ -183,6 +189,9 @@ class FlowMonitor {
     uint64_t audioSwPackets_ = 0;
 
     CounterState counters_;
+
+    VideoPreview videoPreview_;
+    AudioPreview audioPreview_;
 };
 
 nlohmann::json flowAddressToJson(const FlowAddress& address);

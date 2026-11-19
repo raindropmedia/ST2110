@@ -4,8 +4,10 @@
 #include <arpa/inet.h>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <mtl_api.h>
 #include <mutex>
 #include <st20_api.h>
@@ -165,12 +167,53 @@ bool toIpv4(const std::string& text, uint8_t* out) {
 
 } // namespace
 
+struct FlowSession;
+
+// Wandelt Vorschaubilder außerhalb des Datenpfads: der Rückruf von MTL reicht den Rahmen nur weiter,
+// der Thread rechnet ihn um und gibt ihn danach an MTL zurück.
+class PreviewWorker {
+  public:
+    struct Job {
+        FlowSession* session;
+        void* frame;
+        size_t bytes;
+        uint32_t width;
+        uint32_t height;
+    };
+    PreviewWorker() : thread_([this] { run(); }) {}
+    ~PreviewWorker() {
+        {
+            std::lock_guard lock(mutex_);
+            stop_ = true;
+        }
+        cv_.notify_all();
+        thread_.join();
+    }
+    void push(const Job& job) {
+        {
+            std::lock_guard lock(mutex_);
+            jobs_.push_back(job);
+        }
+        cv_.notify_one();
+    }
+
+  private:
+    void run();
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    std::deque<Job> jobs_;
+    bool stop_ = false;
+    std::thread thread_;
+};
+
 // Eine MTL-Sitzung je Flow; priv der Rückrufe zeigt auf diese Struktur.
 struct FlowSession {
     std::shared_ptr<FlowMonitor> monitor;
     st20_rx_handle video = nullptr;
     st30_rx_handle audio = nullptr;
     bool passKnown = false;
+    PreviewWorker* previewWorker = nullptr;
+    std::atomic<bool> previewBusy{false}; // ein Rahmen liegt beim PreviewWorker
 
     // --- Rückrufe aus dem Datenpfad von MTL (kurz halten) ---
 
@@ -199,14 +242,26 @@ struct FlowSession {
                 report.timing[i] = toFrameTiming(*meta->tp[i]);
             }
         }
+        self->monitor->onVideoFrame(report);
+        // Vorschau angefordert: Rahmen an den PreviewWorker, der ihn danach zurückgibt.
+        auto& preview = self->monitor->videoPreview();
+        if (self->previewWorker != nullptr && preview.due(self->monitor->clockNow()) &&
+            meta->status != ST_FRAME_STATUS_CORRUPTED && !self->previewBusy.exchange(true)) {
+            self->previewWorker->push({self, frame, meta->frame_total_size, meta->width, meta->height});
+            return 0;
+        }
         // Bildinhalt wird nicht gebraucht: sofort zurückgeben.
         st20_rx_put_framebuff(self->video, frame);
-        self->monitor->onVideoFrame(report);
         return 0;
     }
 
-    static int onAudioFrame(void* priv, void* frame, struct st30_rx_frame_meta* /*meta*/) {
+    static int onAudioFrame(void* priv, void* frame, struct st30_rx_frame_meta* meta) {
         auto* self = static_cast<FlowSession*>(priv);
+        auto& preview = self->monitor->audioPreview();
+        if (preview.wanted(self->monitor->clockNow())) {
+            preview.pushPcm(static_cast<const uint8_t*>(frame), meta->frame_recv_size,
+                            self->monitor->config().audio->format.bitDepth);
+        }
         st30_rx_put_framebuff(self->audio, frame);
         return 0;
     }
@@ -235,6 +290,10 @@ struct FlowSession {
 #endif
 
     void free() {
+        // Liegt noch ein Rahmen beim PreviewWorker, erst dessen Rückgabe abwarten.
+        while (previewBusy.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
         if (video != nullptr) {
             st20_rx_free(video);
             video = nullptr;
@@ -246,6 +305,33 @@ struct FlowSession {
     }
 };
 
+void PreviewWorker::run() {
+    while (true) {
+        Job job{};
+        {
+            std::unique_lock lock(mutex_);
+            cv_.wait(lock, [&] { return stop_ || !jobs_.empty(); });
+            if (jobs_.empty()) {
+                return;
+            }
+            job = jobs_.front();
+            jobs_.pop_front();
+        }
+        FlowSession& s = *job.session;
+        const auto& format = s.monitor->config().video->format;
+        const size_t lineBytes = static_cast<size_t>(job.width) / 2 * 5;
+        const auto lines =
+            static_cast<uint32_t>(std::min<size_t>(lineBytes > 0 ? job.bytes / lineBytes : 0, job.height));
+        PreviewImage image;
+        if (convertRfc4175ToRgb(static_cast<const uint8_t*>(job.frame), job.bytes, job.width, lines,
+                                format.interlaced, 480, image)) {
+            s.monitor->videoPreview().put(std::move(image), s.monitor->clockNow());
+        }
+        st20_rx_put_framebuff(s.video, job.frame);
+        s.previewBusy = false;
+    }
+}
+
 struct MtlSource::Impl {
     Options options;
     MonitorHub& hub;
@@ -255,6 +341,7 @@ struct MtlSource::Impl {
     std::vector<std::unique_ptr<FlowSession>> sessions;
     std::atomic<bool> stopping{false};
     std::thread statsThread;
+    std::unique_ptr<PreviewWorker> previewWorker = std::make_unique<PreviewWorker>();
 
     Impl(const Options& o, MonitorHub& h) : options(o), hub(h) {}
 
@@ -263,6 +350,7 @@ struct MtlSource::Impl {
         if (statsThread.joinable()) {
             statsThread.join();
         }
+        previewWorker.reset(); // offene Rahmen werden noch zurückgegeben
         for (auto& s : sessions) {
             s->free();
         }
@@ -474,6 +562,7 @@ std::string MtlSource::addFlow(const FlowConfig& flow, std::string& error) {
     }
     auto session = std::make_unique<FlowSession>();
     session->monitor = monitor;
+    session->previewWorker = impl_->previewWorker.get();
     std::lock_guard lock(impl_->mutex);
     if (!impl_->openSession(*session, error)) {
         session->free();

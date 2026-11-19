@@ -11,3 +11,4 @@ Eine überholte Entscheidung wird nicht gelöscht, sondern auf „ersetzt durch 
 | [0003](0003-paket-rueckruf-als-mtl-patch.md) | Paket-Rückruf als eigener Patch für MTL | vorläufig angenommen |
 | [0004](0004-web-oberflaeche-im-programm.md) | Web-Oberfläche im Messprogramm, Diagramme ohne Bibliothek | angenommen |
 | [0005](0005-mehrere-flows-und-erkennung.md) | Mehrere Flows und Flow-Erkennung über eine Kernel-Schnittstelle | vorläufig angenommen |
+| [0006](0006-vorschau.md) | Bild- und Tonvorschau im Browser ohne Codec | angenommen |

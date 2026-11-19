@@ -1,6 +1,7 @@
 #include "web/WebServer.h"
 
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <httplib.h>
 
@@ -125,6 +126,66 @@ bool WebServer::start(const std::string& host, uint16_t port, std::string& error
             return;
         }
         sendJson(res, json{{"ok", true}});
+    });
+    s.Get("/api/preview/video", [this](const httplib::Request& req, httplib::Response& res) {
+        auto flow = hub_.flow(req.get_param_value("flow"));
+        if (!flow || !flow->config().video) {
+            sendJson(res, json{{"error", "Kein Videoflow mit dieser ID"}}, 404);
+            return;
+        }
+        const double now = flow->clockNow();
+        flow->videoPreview().request(now);
+        const PreviewImage image = flow->videoPreview().latest();
+        res.set_header("Cache-Control", "no-store");
+        if (image.rgb.empty()) {
+            res.status = 204; // erstes Bild folgt
+            return;
+        }
+        res.set_header("X-Preview-Width", std::to_string(image.width));
+        res.set_header("X-Preview-Height", std::to_string(image.height));
+        res.set_header("X-Preview-Sequence", std::to_string(image.sequence));
+        res.set_header("X-Preview-Age-Ms",
+                       std::to_string(static_cast<int64_t>((now - image.timeSec) * 1000)));
+        res.set_content(std::string(image.rgb.begin(), image.rgb.end()), "application/octet-stream");
+    });
+    s.Get("/api/preview/audio", [this](const httplib::Request& req, httplib::Response& res) {
+        auto flow = hub_.flow(req.get_param_value("flow"));
+        if (!flow || !flow->config().audio) {
+            sendJson(res, json{{"error", "Kein Tonflow mit dieser ID"}}, 404);
+            return;
+        }
+        uint64_t from = 0;
+        unsigned pair = 0;
+        try {
+            if (req.has_param("from")) {
+                from = std::stoull(req.get_param_value("from"));
+            }
+            if (req.has_param("pair")) {
+                pair = static_cast<unsigned>(std::stoul(req.get_param_value("pair")));
+            }
+        } catch (const std::exception&) {
+            sendJson(res, json{{"error", "from und pair müssen Zahlen sein"}}, 400);
+            return;
+        }
+        auto& preview = flow->audioPreview();
+        preview.request(flow->clockNow());
+        const auto chunk = preview.read(from, pair, flow->config().audio->format.sampleRate);
+        std::string peaks;
+        for (size_t i = 0; i < chunk.peaksDbfs.size(); ++i) {
+            char buffer[16];
+            std::snprintf(buffer, sizeof(buffer), "%s%.1f", i == 0 ? "" : ",", chunk.peaksDbfs[i]);
+            peaks += buffer;
+        }
+        res.set_header("Cache-Control", "no-store");
+        res.set_header("X-Audio-Start", std::to_string(chunk.start));
+        res.set_header("X-Audio-Frames", std::to_string(chunk.frames));
+        res.set_header("X-Audio-Rate", std::to_string(chunk.sampleRate));
+        res.set_header("X-Audio-Channels", std::to_string(chunk.channels));
+        res.set_header("X-Audio-Peaks", peaks);
+        // 16 Bit, verschachtelt, Little Endian (Byte-Reihenfolge der Zielplattform x86/ARM)
+        const auto* bytes = reinterpret_cast<const char*>(chunk.stereo.data());
+        res.set_content(std::string(bytes, bytes + chunk.stereo.size() * sizeof(int16_t)),
+                        "application/octet-stream");
     });
     s.Get("/api/demo", [this](const httplib::Request&, httplib::Response& res) {
         if (!demo_) {

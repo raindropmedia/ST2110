@@ -14,7 +14,7 @@ Einsatz: Studio und Lehre an der HSD; Vorarbeit für ST 2110 im Studio-Gateway (
 ## Aktueller Stand
 
 Branch `tests/initial-setup`. `st2110-monitor` mit Demo, Web-Oberfläche, Video/Ton/PTP/2022-7-Auswertung
-für mehrere Flows (zur Laufzeit änderbar), Flow-Erkennung (AF_PACKET, SAP) und SDP-Import läuft und ist
+für mehrere Flows (zur Laufzeit änderbar), Flow-Erkennung (AF_PACKET, SAP), Bild-/Tonvorschau und SDP-Import läuft und ist
 getestet (doctest, Playwright-Screenshots der Oberfläche, Erkennung auf `lo` mit echten Paketen). Der MTL-Pfad
 (`src/mtl/MtlSource.cpp`) kompiliert und linkt gegen MTL v26.09 mit Patch, ist aber nicht auf Hardware
 gelaufen. Referenzkarte E830-XXVDA2 (`8086:12d3`), noch nicht geliefert.
@@ -49,8 +49,8 @@ horizontales Scrollen.
 
 | Pfad | Inhalt |
 | --- | --- |
-| `src/core/` | Ohne MTL: `Options` (Flows als `FlowConfig`), `Sdp`, `FrameRate`, `AudioFormat`, `VideoTimingModel` (Grenzwerte und Urteil wie MTL), `VideoPacketAnalyzer`, `AudioPacketAnalyzer`, `PtpMonitor`/`PathSkew`, `Histogram`, `TimeSeries`, `TimingStats`, `FlowMonitor` (ein Flow, threadsicher), `MonitorHub` (alle Flows, PTP, Ereignisse, Erkennung), `FlowController` (Flows zur Laufzeit), `PacketParser`, `FlowTable` (erkannte Flows, Formatschätzung), `SapDirectory`, `Report`, `SyntheticSender` |
-| `src/mtl/` | `MtlSource`: MTL-Instanz, je Flow `st20_rx`/`st30_rx` mit Timing-Parser, Paket-Rückruf, PTP, Zähler |
+| `src/core/` | Ohne MTL: `Options` (Flows als `FlowConfig`), `Sdp`, `FrameRate`, `AudioFormat`, `VideoTimingModel` (Grenzwerte und Urteil wie MTL), `VideoPacketAnalyzer`, `AudioPacketAnalyzer`, `PtpMonitor`/`PathSkew`, `Histogram`, `TimeSeries`, `TimingStats`, `FlowMonitor` (ein Flow, threadsicher), `MonitorHub` (alle Flows, PTP, Ereignisse, Erkennung), `FlowController` (Flows zur Laufzeit), `Preview` (RFC 4175 → RGB, Ton-Ringpuffer, Pegel, Testbild/-ton), `PacketParser`, `FlowTable` (erkannte Flows, Formatschätzung), `SapDirectory`, `Report`, `SyntheticSender` |
+| `src/mtl/` | `MtlSource`: MTL-Instanz, je Flow `st20_rx`/`st30_rx` mit Timing-Parser, Paket-Rückruf, PTP, Zähler; `PreviewWorker` wandelt Vorschaubilder außerhalb des Datenpfads |
 | `src/discovery/` | `Discovery`: AF_PACKET-Mitschnitt und SAP-Empfang auf einer Kernel-Schnittstelle (nur Linux) |
 | `src/demo/` | `DemoSource`: synthetische Flows mit umschaltbaren Störungen, simulierte Erkennung und SAP |
 | `src/web/` | `WebServer`: statische Dateien und JSON-API |
@@ -83,6 +83,8 @@ horizontales Scrollen.
 - Sperrreihenfolge: Flow vor Hub (Ereignisse eines Flows gehen an den Hub). Der Hub ruft Flows nie unter
   seiner eigenen Sperre auf; Quellen (`MtlSource`, `DemoSource`) rufen `MonitorHub::addFlow` ohne eigene Sperre.
 - MTL lässt nur eine Instanz je Prozess sinnvoll zu (Einstellungen der Karte gelten prozessweit).
+- Vorschau nur auf Anforderung (`VideoPreview::due`, `AudioPreview::wanted`); Bildrahmen nie im Rückruf
+  wandeln, sondern an den `PreviewWorker` geben und dort an MTL zurückgeben (ADR 0006).
 
 **MTL-Patch**
 - Änderungen an MTL nur als Patch in `patches/mtl/<version>/`, mit Makro zur Erkennung

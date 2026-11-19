@@ -6,6 +6,7 @@ add_executable(st2110_tests
     test_histogram.cpp
     test_monitor.cpp
     test_options.cpp
+    test_preview.cpp
     test_ptp.cpp
     test_sdp.cpp
     test_timing_stats.cpp

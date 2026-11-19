@@ -21,6 +21,7 @@ Angelehnt an die Ansichten von Telestream PRISM und Phabrix QxL, soweit MTL die 
 | Ansicht | Inhalt |
 | --- | --- |
 | Flows | **Überwachte Flows** (Name, Art, Format, Ziel P/R, Quelle, PT, Datenrate P/R, Pakete/s, Verlust, Urteil; anzeigen, entfernen, hinzufügen per Angabe oder SDP), **im Netz erkannte Flows** (Ziel, Quelle, Art, geschätztes Format, PT, SSRC, Datenrate, Pakete/s, Sequenzfehler, DSCP, VLAN; per Klick überwachen), **per SAP angekündigte Sitzungen** |
+| Vorschau | **Bild** des gewählten Videoflows (verkleinert, bis 5 Bilder/s, Vollbild) bzw. **Ton** zum Anhören (Kanalpaar wählbar, Lautstärke) mit **Pegelmessern** aller Kanäle in dBFS ([ADR 0006](docs/adr/0006-vorschau.md)) |
 | Übersicht | für den in der Kopfzeile gewählten Flow: Kacheln je Pfad mit Urteil narrow/wide/failed, Cinst, VRX, FPT, Latenz, RTP-Offset, IPT; Ton DPVR/TSDF; PTP; 2022-7; Verluste; Verläufe |
 | Video ST 2110-21 | **Interpacket-Timing-Histogramm** (IPT, Sollwert TRS), Cinst- und VRX-Histogramm mit narrow/wide-Grenzen, Verläufe je Bild (Cinst, VRX, FPT, Latenz, RTP-Offset, IPT max), Kenngrößen und Grenzwerte, Fehlerursachen |
 | Paketprofil | Ankunft **jedes Pakets** eines Bildes gegen die Sollzeit TR_OFFSET + (i+1)·TRS, Cinst und VRX über dem Bild, Ankunftsverlauf; letztes oder schlechtestes Bild |
@@ -40,6 +41,10 @@ umschaltbaren Störungen (Jitter, Bündel, zu spät, Verlust, Pfadversatz, Ton-J
 die Demo simuliert auch weitere Flows im Netz, PTP-Pakete, Zusatzdaten und SAP-Ankündigungen.
 
 ![Flow-Übersicht](docs/bilder/flow-uebersicht.png)
+
+| Bildvorschau (Demo-Testbild) | Ton: Pegel und Anhören |
+| --- | --- |
+| ![Bildvorschau](docs/bilder/vorschau-video.png) | ![Tonvorschau](docs/bilder/vorschau-ton.png) |
 
 | Bündel (wide) im Video-Timing | Paketprofil des schlechtesten Bildes |
 | --- | --- |
@@ -116,6 +121,8 @@ Programm als **reiner Netz-Scanner**, auch ohne MTL: `sudo st2110-monitor --disc
 | `GET /api/flows` | überwachte, erkannte und per SAP angekündigte Flows, Status der Erkennung |
 | `POST /api/flows` | Flow überwachen: `{"kind":"video","spec":"239.1.1.1:20000,format=1920x1080p50"}`, `{"sdp":"v=0…"}` oder `{"sap":"<schlüssel>"}` |
 | `DELETE /api/flows/<id>` | Flow nicht mehr überwachen |
+| `GET /api/preview/video?flow=v1` | Vorschaubild (RGB roh, Größe in `X-Preview-Width`/`-Height`; 204 bis zum ersten Bild) |
+| `GET /api/preview/audio?flow=a1&from=n&pair=0` | Ton ab Abtastwert n, Kanalpaar als 16 Bit stereo, Pegel aller Kanäle in `X-Audio-Peaks` |
 | `GET /api/snapshot?flow=v1&window=60` | Werte, Histogramme, Verläufe und Profile eines Flows, PTP, Ereignisse, Flow-Liste |
 | `POST /api/reset` | Messwerte zurücksetzen |
 | `GET/POST /api/demo` | Störung der Demo abfragen bzw. setzen (`{"preset": "burst"}`) |

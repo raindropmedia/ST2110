@@ -23,6 +23,11 @@ namespace st2110 {
 //                                        {"sdp": "v=0…"} oder {"sap": "<schlüssel>"}
 //   DELETE /api/flows/<id>               Flow nicht mehr überwachen
 //   GET    /api/snapshot?flow=v1&window=s Werte eines Flows, PTP, Ereignisse, Flow-Liste
+//   GET    /api/preview/video?flow=v1    Vorschaubild (RGB, Kopfzeilen
+//   X-Preview-Width/-Height/-Sequence/-Age-Ms;
+//                                        204 bis zum ersten Bild); Abruf hält die Vorschau 3 s lang aktiv
+//   GET    /api/preview/audio?flow=a1&from=n&pair=0  Ton ab Abtastwert n (16 Bit stereo LE, Kopfzeilen
+//                                        X-Audio-Start/-Frames/-Rate/-Channels/-Peaks)
 //   POST   /api/reset                    Messwerte zurücksetzen
 //   GET  /api/demo              Störungen der Demo (nur mit --demo)
 //   POST /api/demo              {"preset": "burst"}

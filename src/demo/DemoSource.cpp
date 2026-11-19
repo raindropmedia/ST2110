@@ -1,5 +1,7 @@
 #include "demo/DemoSource.h"
 
+#include "core/Preview.h"
+
 #include <algorithm>
 #include <arpa/inet.h>
 #include <chrono>
@@ -377,6 +379,31 @@ void DemoSource::emitAudio(Generator& g, uint64_t packet, const SenderFaults& fa
     }
 }
 
+void DemoSource::previewVideo(Generator& g, int index, const SenderFaults& faults) {
+    auto& preview = g.monitor->videoPreview();
+    const double now = g.monitor->clockNow();
+    if (!preview.due(now)) {
+        return;
+    }
+    const auto& f = g.config.video->format;
+    PreviewImage image;
+    const uint32_t width = std::min<uint32_t>(480, f.width);
+    const uint32_t height = std::max<uint32_t>(2, width * f.height / f.width);
+    renderTestPattern(image, width, height, now, index, faults.lossRate > 0);
+    preview.put(std::move(image), now);
+}
+
+void DemoSource::previewAudio(Generator& g, uint64_t firstPacket, uint64_t packets) {
+    if (!g.monitor || !g.monitor->audioPreview().wanted(g.monitor->clockNow())) {
+        return;
+    }
+    const auto& af = g.config.audio->format;
+    const uint64_t spp = af.samplesPerPacket();
+    generateTestTone(g.toneBuffer, firstPacket * spp, static_cast<size_t>(packets * spp), af.channels,
+                     af.sampleRate);
+    g.monitor->audioPreview().pushFloat(g.toneBuffer.data(), static_cast<size_t>(packets * spp));
+}
+
 void DemoSource::announce() {
     // Kamera 3 (nur im Netz) und Kamera 1 (sofern vorhanden) wie ein Sender per SAP ankündigen.
     std::vector<FlowConfig> cam3(background_.begin(), background_.begin() + 2);
@@ -423,7 +450,11 @@ void DemoSource::run() {
                     }
                     if (g.next > first) {
                         discoverAudio(g, first, static_cast<uint32_t>(g.next - first));
+                        previewAudio(g, first, g.next - first);
                     }
+                }
+                if (g.monitor && g.config.video) {
+                    previewVideo(g, static_cast<int>(&gp - generators_.data()), faults);
                 }
             }
         }
