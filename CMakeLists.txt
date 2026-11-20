@@ -37,6 +37,7 @@ add_library(st2110_core STATIC
     src/core/VideoTimingModel.cpp
 )
 target_include_directories(st2110_core PUBLIC src)
+target_include_directories(st2110_core SYSTEM PRIVATE ${stb_SOURCE_DIR})
 target_link_libraries(st2110_core PUBLIC nlohmann_json::nlohmann_json)
 
 # Messprogramm: Demo und Web-Oberfläche immer, Empfang über MTL nur, wenn MTL gefunden wird

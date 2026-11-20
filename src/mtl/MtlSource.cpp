@@ -322,13 +322,18 @@ void PreviewWorker::run() {
         const size_t lineBytes = static_cast<size_t>(job.width) / 2 * 5;
         const auto lines =
             static_cast<uint32_t>(std::min<size_t>(lineBytes > 0 ? job.bytes / lineBytes : 0, job.height));
+        const PreviewSettings settings = s.monitor->videoPreview().settings();
         PreviewImage image;
-        if (convertRfc4175ToRgb(static_cast<const uint8_t*>(job.frame), job.bytes, job.width, lines,
-                                format.interlaced, 480, image)) {
-            s.monitor->videoPreview().put(std::move(image), s.monitor->clockNow());
-        }
+        const bool converted =
+            convertRfc4175ToRgb(static_cast<const uint8_t*>(job.frame), job.bytes, job.width, lines,
+                                format.interlaced, settings.maxWidth, image);
+        // Rahmen sofort zurückgeben; die JPEG-Kodierung braucht ihn nicht mehr.
         st20_rx_put_framebuff(s.video, job.frame);
         s.previewBusy = false;
+        if (converted && encodeJpeg(image, settings.quality)) {
+            image.rgb = {};
+            s.monitor->videoPreview().put(std::move(image), s.monitor->clockNow());
+        }
     }
 }
 
@@ -441,7 +446,7 @@ struct MtlSource::Impl {
             ops.interlaced = v.format.interlaced;
             ops.fmt = ST20_FMT_YUV_422_10BIT;
             ops.payload_type = v.payloadType;
-            ops.framebuff_cnt = 3;
+            ops.framebuff_cnt = 4; // einer kann kurz beim PreviewWorker liegen
             ops.notify_frame_ready = &FlowSession::onVideoFrame;
             ops.flags = ST20_RX_FLAG_TIMING_PARSER_META | ST20_RX_FLAG_RECEIVE_INCOMPLETE_FRAME;
 #ifdef ST20_RX_TP_PACKET_HOOK

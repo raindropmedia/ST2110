@@ -56,7 +56,8 @@ class DemoSource : public FlowController {
     void discoverVideo(const Generator& g, uint64_t frame, bool redundant, double skewNs);
     void discoverAudio(Generator& g, uint64_t firstPacket, uint32_t count);
     void announce();
-    void previewVideo(Generator& g, int index, const SenderFaults& faults);
+    void previewLoop();
+    void updatePreviewTargets();
     void previewAudio(Generator& g, uint64_t firstPacket, uint64_t packets);
     std::unique_ptr<Generator> makeGenerator(const FlowConfig& config, std::shared_ptr<FlowMonitor> monitor);
 
@@ -70,6 +71,16 @@ class DemoSource : public FlowController {
     uint64_t seed_ = 11;
     std::atomic<bool> stop_{false};
     std::thread thread_;
+    std::thread previewThread_;
+
+    struct PreviewTarget {
+        std::shared_ptr<FlowMonitor> monitor;
+        VideoFormat format;
+        int index;
+    };
+    std::mutex previewMutex_; // schützt previewTargets_ (kurz gehalten)
+    std::vector<PreviewTarget> previewTargets_;
+    std::atomic<bool> glitch_{false};
 };
 
 } // namespace st2110

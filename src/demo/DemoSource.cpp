@@ -163,17 +163,22 @@ DemoSource::DemoSource(const Options& options, MonitorHub& hub) : hub_(hub) {
         for (const auto& b : background_) {
             generators_.push_back(makeGenerator(b, nullptr));
         }
+        updatePreviewTargets();
     }
     hub_.setDiscoveryStatus(nlohmann::json{
         {"interface", "demo"}, {"active", true}, {"sap", true}, {"error", nullptr}, {"sapError", nullptr}});
     hub_.addEvent("info", "Demo gestartet: synthetische Flows ohne Karte");
     thread_ = std::thread([this] { run(); });
+    previewThread_ = std::thread([this] { previewLoop(); });
 }
 
 DemoSource::~DemoSource() {
     stop_ = true;
     if (thread_.joinable()) {
         thread_.join();
+    }
+    if (previewThread_.joinable()) {
+        previewThread_.join();
     }
 }
 
@@ -191,11 +196,26 @@ std::string DemoSource::addFlow(const FlowConfig& flow, std::string& error) {
             if (flow.video) {
                 monitor->setVideoPacketsPerFrame(g->senderP->videoParams().packetsPerFrame);
             }
+            updatePreviewTargets();
             return monitor->id();
         }
     }
     generators_.push_back(makeGenerator(monitor->config(), monitor));
+    updatePreviewTargets();
     return monitor->id();
+}
+
+// Aufruf unter mutex_: Videoflows mit Monitor für den Vorschau-Thread übernehmen.
+void DemoSource::updatePreviewTargets() {
+    std::vector<PreviewTarget> targets;
+    for (size_t i = 0; i < generators_.size(); ++i) {
+        const auto& g = *generators_[i];
+        if (g.monitor && g.config.video) {
+            targets.push_back({g.monitor, g.config.video->format, static_cast<int>(i)});
+        }
+    }
+    std::lock_guard lock(previewMutex_);
+    previewTargets_ = std::move(targets);
 }
 
 bool DemoSource::removeFlow(const std::string& id, std::string& error) {
@@ -212,6 +232,7 @@ bool DemoSource::removeFlow(const std::string& id, std::string& error) {
                 } else {
                     generators_.erase(it);
                 }
+                updatePreviewTargets();
                 break;
             }
         }
@@ -248,6 +269,7 @@ bool DemoSource::setPreset(const std::string& id) {
         preset_ = id;
         faults_ = f;
         ptpNoiseNs_ = ptpNoise;
+        glitch_ = f.lossRate > 0;
     }
     for (const auto& p : presets()) {
         if (p.id == id) {
@@ -379,18 +401,40 @@ void DemoSource::emitAudio(Generator& g, uint64_t packet, const SenderFaults& fa
     }
 }
 
-void DemoSource::previewVideo(Generator& g, int index, const SenderFaults& faults) {
-    auto& preview = g.monitor->videoPreview();
-    const double now = g.monitor->clockNow();
-    if (!preview.due(now)) {
-        return;
+void DemoSource::previewLoop() {
+    // Testbilder in eigenem Thread: große Bilder und JPEG dürfen die Paketerzeugung nicht aufhalten.
+    struct Job {
+        std::shared_ptr<FlowMonitor> monitor;
+        VideoFormat format;
+        int index;
+        bool glitch;
+    };
+    while (!stop_) {
+        // Eigene, kurze Sperre: mutex_ hält der Paketgenerator je Takt lange.
+        std::vector<Job> jobs;
+        {
+            std::lock_guard lock(previewMutex_);
+            for (const auto& t : previewTargets_) {
+                if (t.monitor->videoPreview().due(t.monitor->clockNow())) {
+                    jobs.push_back({t.monitor, t.format, t.index, glitch_.load()});
+                }
+            }
+        }
+        for (const auto& job : jobs) {
+            auto& preview = job.monitor->videoPreview();
+            const PreviewSettings settings = preview.settings();
+            const double now = job.monitor->clockNow();
+            const uint32_t width = std::min(settings.maxWidth, job.format.width) & ~1u;
+            const uint32_t height = std::max<uint32_t>(2, width * job.format.height / job.format.width);
+            PreviewImage image;
+            renderTestPattern(image, width, height, now, job.index, job.glitch);
+            if (encodeJpeg(image, settings.quality)) {
+                image.rgb = {};
+                preview.put(std::move(image), now);
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(jobs.empty() ? 2 : 1));
     }
-    const auto& f = g.config.video->format;
-    PreviewImage image;
-    const uint32_t width = std::min<uint32_t>(480, f.width);
-    const uint32_t height = std::max<uint32_t>(2, width * f.height / f.width);
-    renderTestPattern(image, width, height, now, index, faults.lossRate > 0);
-    preview.put(std::move(image), now);
 }
 
 void DemoSource::previewAudio(Generator& g, uint64_t firstPacket, uint64_t packets) {
@@ -452,9 +496,6 @@ void DemoSource::run() {
                         discoverAudio(g, first, static_cast<uint32_t>(g.next - first));
                         previewAudio(g, first, g.next - first);
                     }
-                }
-                if (g.monitor && g.config.video) {
-                    previewVideo(g, static_cast<int>(&gp - generators_.data()), faults);
                 }
             }
         }

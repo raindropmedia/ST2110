@@ -20,7 +20,15 @@ set(HTTPLIB_USE_OPENSSL_IF_AVAILABLE OFF CACHE INTERNAL "")
 set(HTTPLIB_USE_ZLIB_IF_AVAILABLE OFF CACHE INTERNAL "")
 set(HTTPLIB_USE_BROTLI_IF_AVAILABLE OFF CACHE INTERNAL "")
 set(HTTPLIB_USE_ZSTD_IF_AVAILABLE OFF CACHE INTERNAL "")
-FetchContent_MakeAvailable(nlohmann_json httplib)
+# JPEG-Kodierer für die Bildvorschau (stb_image_write, gemeinfrei, nur Header).
+# Fester Commit vom 2026-11-01; der spätere Fix vom 12.11. betrifft nur das Schreiben in Dateien,
+# das hier abgeschaltet ist (STBI_WRITE_NO_STDIO).
+FetchContent_Declare(
+    stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_TAG 61e70c5ce7bf0e0ac47e694f00c9da61bcdc7b32
+)
+FetchContent_MakeAvailable(nlohmann_json httplib stb)
 
 if(ST2110_BUILD_TESTS)
     # doctest 2.4.11 verlangt cmake_minimum_required < 3.5, was CMake 4 ablehnt.

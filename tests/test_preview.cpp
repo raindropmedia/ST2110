@@ -61,6 +61,45 @@ TEST_CASE("Vorschau: RFC 4175 nach RGB, Verkleinerung und Farben") {
     CHECK(img.rgb[2] < 15);
 
     CHECK_FALSE(convertRfc4175ToRgb(frame.data(), 100, 1920, 1080, false, 480, img));
+
+    // volle Auflösung aus einem Halbbild: Zeilenverdopplung auf 1080
+    REQUIRE(convertRfc4175ToRgb(field.data(), field.size(), 1920, 540, true, 1920, img));
+    CHECK(img.width == 1920);
+    CHECK(img.height == 1080);
+    // halbe Auflösung: 960 x 540
+    REQUIRE(convertRfc4175ToRgb(frame.data(), frame.size(), 1920, 1080, false, 960, img));
+    CHECK(img.width == 960);
+    CHECK(img.height == 540);
+}
+
+TEST_CASE("Vorschau: JPEG-Kodierung") {
+    PreviewImage img;
+    renderTestPattern(img, 960, 540, 1.0, 0, false);
+    REQUIRE(encodeJpeg(img, 80));
+    REQUIRE(img.jpeg.size() > 1000);
+    CHECK(static_cast<uint8_t>(img.jpeg[0]) == 0xFF); // SOI
+    CHECK(static_cast<uint8_t>(img.jpeg[1]) == 0xD8);
+    CHECK(static_cast<uint8_t>(img.jpeg[img.jpeg.size() - 2]) == 0xFF); // EOI
+    CHECK(static_cast<uint8_t>(img.jpeg.back()) == 0xD9);
+    CHECK(img.jpeg.size() < img.rgb.size() / 5); // deutlich kleiner als RGB
+    PreviewImage empty;
+    CHECK_FALSE(encodeJpeg(empty, 80));
+}
+
+TEST_CASE("Vorschau: Bildrate und Einstellungen") {
+    VideoPreview v;
+    PreviewSettings fast;
+    fast.fps = 25;
+    fast.maxWidth = 1920;
+    v.request(0.0, fast);
+    CHECK(v.settings().maxWidth == 1920);
+    PreviewImage img;
+    v.put(img, 0.0);
+    CHECK_FALSE(v.due(0.02));
+    CHECK(v.due(0.04));
+    fast.fps = 500; // begrenzt auf 50
+    v.request(0.04, fast);
+    CHECK(v.settings().fps == 50.0);
 }
 
 TEST_CASE("Vorschau: Bilder nur auf Anforderung und im Abstand") {

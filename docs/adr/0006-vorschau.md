@@ -1,6 +1,7 @@
 # ADR 0006: Bild- und Tonvorschau im Browser ohne Codec
 
-- Status: angenommen (Demo und Wandlung getestet, MTL-Pfad nicht auf Hardware)
+- Status: angenommen, geändert am 2026-11-20 (JPEG, wählbare Größe und Bildrate; Demo und Wandlung
+  getestet, MTL-Pfad nicht auf Hardware)
 - Datum: 2026-11-19
 
 ## Kontext
@@ -9,7 +10,30 @@ Wie bei PRISM und QxL soll man den Inhalt des gewählten Flows sehen bzw. hören
 (falsche Kamera, falsches Kanalpaar, Stille) schnell zu erkennen. Der Messplatz soll dafür keine
 Codec-Bibliothek brauchen und den Datenpfad von MTL nicht belasten.
 
-## Entscheidung
+## Änderung 2026-11-20: höhere Qualität
+
+Rohes RGB begrenzte die Vorschau auf kleine, langsame Bilder (480 Pixel, 5 Bilder/s ≈ 2 MB/s; volle
+Auflösung mit 25 Bildern/s wären über 1 Gbit/s). Seitdem gilt:
+
+- Vorschaubilder werden als **JPEG** übertragen (`stb_image_write`, gemeinfrei, nur Header, fester Commit
+  über FetchContent, nur Callback-Ausgabe ohne Dateizugriff). Größe (480, 960, voll, UHD), Bildrate
+  (1–50 Bilder/s) und Qualität wählt die Oberfläche je Abruf.
+- Der `PreviewWorker` gibt den MTL-Rahmen direkt nach der Farbumrechnung zurück; kodiert wird danach.
+- Farbumrechnung über Tabellen in Festkomma; Halbbilder werden für volle Höhe zeilenverdoppelt.
+- Abruf mit **Long Polling** (`after=<Bildnummer>`, höchstens 250 ms Wartezeit): Den Takt gibt das
+  Messgerät auf einem festen Raster der Bildrate vor; bei langsamer Verbindung sinkt die Rate von selbst.
+- Der Webserver setzt **TCP_NODELAY**: Ohne das wartete jede Antwort rund 40 ms auf das verzögerte ACK
+  des Browsers (Nagle), was die Vorschau bei etwa 23 Bildern/s deckelte.
+
+Gemessen (Demo, Release-Build, ein Kern je Aufgabe; Testbild, echte Bilder sind größer):
+
+| Größe | Umrechnung | JPEG (Qualität 80) | Größe je Bild | erreichte Rate |
+| --- | --- | --- | --- | --- |
+| 480 × 270 | 0,8 ms | 1,5 ms | 7 kB | wie eingestellt |
+| 960 × 540 | 2,4 ms | 3,9 ms | 17 kB | 50 Bilder/s |
+| 1920 × 1080 | 7,4 ms | 13,6 ms | 49 kB | 25 bzw. 49 Bilder/s |
+
+## Entscheidung (ursprünglich)
 
 - **Bild:** Nur solange die Oberfläche die Vorschau abfragt (Abruf hält sie 3 s aktiv), gibt der
   Bildrückruf höchstens alle 200 ms einen Rahmen an einen eigenen Thread (`PreviewWorker`). Dieser
@@ -31,14 +55,17 @@ Codec-Bibliothek brauchen und den Datenpfad von MTL nicht belasten.
 
 ## Alternativen
 
-- JPEG im Messgerät (libjpeg-turbo): kleinere Datenmengen, aber eine weitere Abhängigkeit.
+- JPEG mit libjpeg-turbo: schneller, aber Systempaket bzw. größerer Bau; `stb_image_write` reicht für
+  Vorschauraten (siehe Änderung).
 - Weiterleitung als Videostrom (z. B. über GStreamer nach WebRTC): echte Bewegtbilder, aber deutlich
   aufwendiger; das ist eher Aufgabe des Studio-Gateways.
 - Vorschau über einen zweiten Empfänger (z. B. ffplay mit SDP): braucht Zugang zum Messnetz am Arbeitsplatz.
 
 ## Folgen
 
-- Die Vorschau ist eine Inhaltskontrolle, keine Bildbeurteilung (Auslassen statt Filtern, ≤ 5 Bilder/s).
-- Ein Rahmen ist während der Wandlung belegt; bei `framebuff_cnt = 3` bleiben zwei für den Empfang.
+- Die Vorschau ist eine Inhaltskontrolle, keine Bildbeurteilung (Auslassen statt Filtern, JPEG).
+- Ein Rahmen ist während der Farbumrechnung belegt (bei voller Größe etwa 7 ms); `framebuff_cnt` ist
+  deshalb 4.
+- Bei mehreren Betrachtern gelten die zuletzt angeforderten Einstellungen.
 - Beim Entfernen eines Flows wartet `FlowSession::free()`, bis der Rahmen zurückgegeben ist.
 - Beschädigte Bilder (Paketverlust) werden nicht gewandelt.

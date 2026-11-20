@@ -1,26 +1,81 @@
 #include "core/Preview.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+
+// JPEG-Kodierer (gemeinfrei, nothings/stb); nur die Callback-Ausgabe, kein Dateizugriff.
+#define STBI_WRITE_NO_STDIO
+#define STB_IMAGE_WRITE_STATIC
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#pragma GCC diagnostic ignored "-Wsign-compare"
+#pragma GCC diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#pragma GCC diagnostic ignored "-Wconversion"
+#endif
+#include <stb_image_write.h>
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 namespace st2110 {
 namespace {
 
-uint8_t clamp8(double v) {
-    return static_cast<uint8_t>(std::clamp(v, 0.0, 255.0));
+// BT.709, begrenzter Bereich (Y 64–940, C 64–960 bei 10 Bit) nach RGB 8 Bit, als Tabellen in
+// Festkomma (16 Bit Nachkomma): R = Y + crR, G = Y + cbG + crG, B = Y + cbB.
+struct ColorTables {
+    std::array<int32_t, 1024> y{}, crR{}, cbG{}, crG{}, cbB{};
+    ColorTables() {
+        for (int v = 0; v < 1024; ++v) {
+            const double yy = (v - 64) / 876.0 * 255.0;
+            const double c = (v - 512) / 896.0 * 255.0;
+            y[v] = static_cast<int32_t>(std::lround(yy * 65536.0));
+            crR[v] = static_cast<int32_t>(std::lround(1.5748 * c * 65536.0));
+            cbG[v] = static_cast<int32_t>(std::lround(-0.1873 * c * 65536.0));
+            crG[v] = static_cast<int32_t>(std::lround(-0.4681 * c * 65536.0));
+            cbB[v] = static_cast<int32_t>(std::lround(1.8556 * c * 65536.0));
+        }
+    }
+};
+
+const ColorTables& tables() {
+    static const ColorTables t;
+    return t;
 }
 
-// BT.709, begrenzter Bereich (Y 64–940, C 64–960 bei 10 Bit) nach RGB 8 Bit.
-void yuvToRgb(int y, int cb, int cr, uint8_t* rgb) {
-    const double yy = (y - 64) / 876.0;
-    const double pb = (cb - 512) / 896.0;
-    const double pr = (cr - 512) / 896.0;
-    rgb[0] = clamp8(255.0 * (yy + 1.5748 * pr));
-    rgb[1] = clamp8(255.0 * (yy - 0.1873 * pb - 0.4681 * pr));
-    rgb[2] = clamp8(255.0 * (yy + 1.8556 * pb));
+inline uint8_t clampFixed(int32_t v) {
+    v = (v + 32768) >> 16;
+    return static_cast<uint8_t>(v < 0 ? 0 : v > 255 ? 255 : v);
+}
+
+inline void yuvToRgb(const ColorTables& t, int y, int cb, int cr, uint8_t* rgb) {
+    const int32_t yy = t.y[y];
+    rgb[0] = clampFixed(yy + t.crR[cr]);
+    rgb[1] = clampFixed(yy + t.cbG[cb] + t.crG[cr]);
+    rgb[2] = clampFixed(yy + t.cbB[cb]);
+}
+
+void appendBytes(void* context, void* data, int size) {
+    auto* out = static_cast<std::string*>(context);
+    out->append(static_cast<const char*>(data), static_cast<size_t>(size));
 }
 
 } // namespace
+
+bool encodeJpeg(PreviewImage& image, int quality) {
+    if (image.width == 0 || image.height == 0 ||
+        image.rgb.size() < static_cast<size_t>(image.width) * image.height * 3) {
+        return false;
+    }
+    image.jpeg.clear();
+    image.jpeg.reserve(static_cast<size_t>(image.width) * image.height / 4);
+    return stbi_write_jpg_to_func(&appendBytes, &image.jpeg, static_cast<int>(image.width),
+                                  static_cast<int>(image.height), 3, image.rgb.data(),
+                                  std::clamp(quality, 10, 95)) != 0;
+}
 
 bool convertRfc4175ToRgb(const uint8_t* frame, size_t frameBytes, uint32_t width, uint32_t lines, bool field,
                          uint32_t maxWidth, PreviewImage& out) {
@@ -31,20 +86,23 @@ bool convertRfc4175ToRgb(const uint8_t* frame, size_t frameBytes, uint32_t width
     if (frameBytes < lineBytes * lines) {
         return false;
     }
-    // Schrittweite in Pixelpaaren (waagerecht) und Zeilen (senkrecht)
+    // Schrittweite in Pixeln; gerade, damit je Schritt ganze Pixelpaare entfallen.
     uint32_t step = std::max<uint32_t>(1, (width + maxWidth - 1) / maxWidth);
     if (step > 1 && step % 2 != 0) {
-        ++step; // gerade, damit je Schritt ganze Pixelpaare entfallen und das Seitenverhältnis bleibt
+        ++step;
     }
-    const uint32_t stepY = field ? std::max<uint32_t>(1, step / 2) : step;
     const uint32_t pairStep = std::max<uint32_t>(1, step / 2);
     const uint32_t pairs = width / 2;
     const uint32_t outPairs = (pairs + pairStep - 1) / pairStep;
+    // Senkrecht: volle Bildhöhe (bei Halbbildern doppelt) durch dieselbe Schrittweite
+    const uint32_t fullLines = field ? lines * 2 : lines;
     out.width = outPairs * (step >= 2 ? 1 : 2);
-    out.height = (lines + stepY - 1) / stepY;
+    out.height = (fullLines + step - 1) / step;
     out.rgb.assign(static_cast<size_t>(out.width) * out.height * 3, 0);
+    const ColorTables& t = tables();
     for (uint32_t oy = 0; oy < out.height; ++oy) {
-        const uint8_t* line = frame + static_cast<size_t>(oy) * stepY * lineBytes;
+        const uint32_t srcLine = std::min(lines - 1, (oy * step) / (field ? 2 : 1));
+        const uint8_t* line = frame + static_cast<size_t>(srcLine) * lineBytes;
         uint8_t* dst = out.rgb.data() + static_cast<size_t>(oy) * out.width * 3;
         for (uint32_t op = 0; op < outPairs; ++op) {
             const uint8_t* g = line + static_cast<size_t>(op) * pairStep * 5;
@@ -54,11 +112,11 @@ bool convertRfc4175ToRgb(const uint8_t* frame, size_t frameBytes, uint32_t width
             const int cr = ((g[2] & 0x0F) << 6) | (g[3] >> 2);
             const int y1 = ((g[3] & 0x03) << 8) | g[4];
             if (step >= 2) {
-                yuvToRgb((y0 + y1) / 2, cb, cr, dst);
+                yuvToRgb(t, (y0 + y1) / 2, cb, cr, dst);
                 dst += 3;
             } else {
-                yuvToRgb(y0, cb, cr, dst);
-                yuvToRgb(y1, cb, cr, dst + 3);
+                yuvToRgb(t, y0, cb, cr, dst);
+                yuvToRgb(t, y1, cb, cr, dst + 3);
                 dst += 6;
             }
         }
@@ -113,22 +171,45 @@ void renderTestPattern(PreviewImage& out, uint32_t width, uint32_t height, doubl
     }
 }
 
-void VideoPreview::request(double now) {
+void VideoPreview::request(double now, const PreviewSettings& settings) {
     std::lock_guard lock(mutex_);
     requestedAt_ = now;
+    settings_ = settings;
+    settings_.fps = std::clamp(settings_.fps, 0.2, kMaxFps);
+    settings_.maxWidth = std::clamp<uint32_t>(settings_.maxWidth, 64, 8192);
+    settings_.quality = std::clamp(settings_.quality, 10, 95);
+}
+
+PreviewSettings VideoPreview::settings() const {
+    std::lock_guard lock(mutex_);
+    return settings_;
 }
 
 bool VideoPreview::due(double now) const {
     std::lock_guard lock(mutex_);
-    return now - requestedAt_ < kKeepAliveSec && now - lastPut_ >= kIntervalSec;
+    // lastPut_ ist der Rasterpunkt des letzten Bildes; das nächste ist ein Intervall später fällig.
+    return now - requestedAt_ < kKeepAliveSec && now >= lastPut_ + 1.0 / settings_.fps - 1e-6;
 }
 
 void VideoPreview::put(PreviewImage image, double now) {
-    std::lock_guard lock(mutex_);
-    image.sequence = ++sequence_;
-    image.timeSec = now;
-    image_ = std::move(image);
-    lastPut_ = now;
+    {
+        std::lock_guard lock(mutex_);
+        image.sequence = ++sequence_;
+        image.timeSec = now;
+        image_ = std::move(image);
+        // Festes Raster der Bildrate: kleine Verspätungen holen die folgenden Bilder wieder auf,
+        // nach einer Pause beginnt das Raster neu.
+        const double interval = 1.0 / settings_.fps;
+        lastPut_ = now - lastPut_ < 2 * interval ? lastPut_ + interval : now;
+    }
+    newImage_.notify_all();
+}
+
+PreviewImage VideoPreview::waitNewer(uint64_t afterSequence, double timeoutSec) const {
+    std::unique_lock lock(mutex_);
+    newImage_.wait_for(lock, std::chrono::duration<double>(timeoutSec),
+                       [&] { return sequence_ > afterSequence; });
+    return image_;
 }
 
 PreviewImage VideoPreview::latest() const {

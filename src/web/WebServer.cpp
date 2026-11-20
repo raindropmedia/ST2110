@@ -38,6 +38,9 @@ bool WebServer::start(const std::string& host, uint16_t port, std::string& error
         error = "Ordner der Web-Oberfläche nicht lesbar: " + webuiDir_;
         return false;
     }
+    // Ohne TCP_NODELAY wartet der zweite Teil jeder Antwort auf das verzögerte ACK des Browsers (~40 ms,
+    // Nagle-Algorithmus); das begrenzte die Vorschau auf rund 23 Bilder/s.
+    s.set_tcp_nodelay(true);
     s.set_default_headers({{"X-Content-Type-Options", "nosniff"}, {"Referrer-Policy", "no-referrer"}});
 
     s.Get("/api/info", [this](const httplib::Request&, httplib::Response& res) {
@@ -133,11 +136,35 @@ bool WebServer::start(const std::string& host, uint16_t port, std::string& error
             sendJson(res, json{{"error", "Kein Videoflow mit dieser ID"}}, 404);
             return;
         }
+        PreviewSettings settings;
+        try {
+            if (req.has_param("width")) {
+                settings.maxWidth = static_cast<uint32_t>(std::stoul(req.get_param_value("width")));
+            }
+            if (req.has_param("fps")) {
+                settings.fps = std::stod(req.get_param_value("fps"));
+            }
+            if (req.has_param("quality")) {
+                settings.quality = std::stoi(req.get_param_value("quality"));
+            }
+        } catch (const std::exception&) {
+            sendJson(res, json{{"error", "width, fps und quality müssen Zahlen sein"}}, 400);
+            return;
+        }
+        uint64_t after = 0;
+        if (req.has_param("after")) {
+            try {
+                after = std::stoull(req.get_param_value("after"));
+            } catch (const std::exception&) {
+                after = 0;
+            }
+        }
+        flow->videoPreview().request(flow->clockNow(), settings);
+        // Long Polling: auf ein neueres Bild warten (höchstens 250 ms)
+        const PreviewImage image = flow->videoPreview().waitNewer(after, 0.25);
         const double now = flow->clockNow();
-        flow->videoPreview().request(now);
-        const PreviewImage image = flow->videoPreview().latest();
         res.set_header("Cache-Control", "no-store");
-        if (image.rgb.empty()) {
+        if (image.jpeg.empty()) {
             res.status = 204; // erstes Bild folgt
             return;
         }
@@ -146,7 +173,7 @@ bool WebServer::start(const std::string& host, uint16_t port, std::string& error
         res.set_header("X-Preview-Sequence", std::to_string(image.sequence));
         res.set_header("X-Preview-Age-Ms",
                        std::to_string(static_cast<int64_t>((now - image.timeSec) * 1000)));
-        res.set_content(std::string(image.rgb.begin(), image.rgb.end()), "application/octet-stream");
+        res.set_content(image.jpeg, "image/jpeg");
     });
     s.Get("/api/preview/audio", [this](const httplib::Request& req, httplib::Response& res) {
         auto flow = hub_.flow(req.get_param_value("flow"));

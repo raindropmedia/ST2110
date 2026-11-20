@@ -129,8 +129,14 @@
           <div class="card-head">
             <h3>Bild <span class="hint" id="videoPreviewInfo"></span></h3>
             <div class="inline-controls">
+              <label class="ctl">Größe
+                <select id="previewWidth"><option value="480">klein (480)</option><option value="960" selected>mittel (960)</option><option value="1920">voll (bis 1920)</option><option value="3840">UHD (bis 3840)</option></select>
+              </label>
               <label class="ctl">Bilder/s
-                <select id="previewFps"><option value="1">1</option><option value="2">2</option><option value="5" selected>5</option></select>
+                <select id="previewFps"><option value="1">1</option><option value="5">5</option><option value="10">10</option><option value="25" selected>25</option><option value="50">50</option></select>
+              </label>
+              <label class="ctl">Qualität
+                <select id="previewQuality"><option value="60">60</option><option value="80" selected>80</option><option value="92">92</option></select>
               </label>
               <button id="previewFullscreen" type="button" class="btn small">Vollbild</button>
             </div>
@@ -139,7 +145,7 @@
             <canvas id="previewCanvas" aria-label="Vorschaubild des gewählten Videoflows"></canvas>
             <div class="preview-overlay" id="previewOverlay"></div>
           </div>
-          <p class="note">Verkleinerte Vorschau (höchstens 480 Pixel breit, bis 5 Bilder/s) zur Kontrolle des Inhalts, nicht zur Bildbeurteilung. Nur solange diese Ansicht offen ist, wandelt das Messgerät Bilder um.</p>
+          <p class="note">Vorschau als JPEG (Größe, Bildrate und Qualität wählbar) zur Kontrolle des Inhalts, nicht zur Bildbeurteilung: Verkleinert wird durch Auslassen, Halbbilder werden zeilenverdoppelt. Nur solange diese Ansicht offen ist, wandelt das Messgerät Bilder um; bei langsamer Verbindung sinkt die Bildrate von selbst.</p>
         </div>
         <div class="card" id="audioPreviewCard" hidden>
           <div class="card-head">

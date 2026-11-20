@@ -24,7 +24,8 @@ gelaufen. Referenzkarte E830-XXVDA2 (`8086:12d3`), noch nicht geliefert.
 - C++20, CMake ≥ 3.24 mit Presets (`dev`: ohne MTL, Oberfläche aus `webui/`; `release`: MTL Pflicht), Ninja
 - MTL `v26.09` mit eigenem Patch (`patches/mtl/v26.09/`, ADR 0003) über `scripts/install-mtl.sh`,
   gefunden über `pkg-config mtl`
-- nlohmann/json 3.11.3, cpp-httplib 0.65.0, doctest 2.4.11 (FetchContent, keine Systempakete)
+- nlohmann/json 3.11.3, cpp-httplib 0.65.0, stb_image_write (Commit 61e70c5, JPEG der Vorschau), doctest 2.4.11
+  (FetchContent, keine Systempakete)
 - Web-Oberfläche: HTML/CSS/JS ohne Build-Schritt, eigene Canvas-Diagramme (`webui/charts.js`), keine CDN
 
 ## Build und Test
@@ -84,7 +85,9 @@ horizontales Scrollen.
   seiner eigenen Sperre auf; Quellen (`MtlSource`, `DemoSource`) rufen `MonitorHub::addFlow` ohne eigene Sperre.
 - MTL lässt nur eine Instanz je Prozess sinnvoll zu (Einstellungen der Karte gelten prozessweit).
 - Vorschau nur auf Anforderung (`VideoPreview::due`, `AudioPreview::wanted`); Bildrahmen nie im Rückruf
-  wandeln, sondern an den `PreviewWorker` geben und dort an MTL zurückgeben (ADR 0006).
+  wandeln, sondern an den `PreviewWorker` geben, dort nach der Farbumrechnung sofort an MTL zurückgeben
+  und erst danach JPEG kodieren (ADR 0006).
+- Der Webserver braucht `set_tcp_nodelay(true)`; sonst kostet jede Antwort ~40 ms (Nagle, verzögertes ACK).
 
 **MTL-Patch**
 - Änderungen an MTL nur als Patch in `patches/mtl/<version>/`, mit Makro zur Erkennung

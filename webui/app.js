@@ -877,7 +877,7 @@
   // ---------- Vorschau ----------
   const preview = {
     timer: null, audioTimer: null, flowKey: '', ctx: null, gain: null, listening: false,
-    nextTime: 0, from: 0, holds: [], holdUntil: [], lastSeq: 0, offscreen: document.createElement('canvas'),
+    nextTime: 0, from: 0, holds: [], holdUntil: [], lastSeq: 0, videoRun: 0, shown: [], bytes: [],
   };
 
   function renderPreviewCards(s) {
@@ -893,18 +893,18 @@
   }
 
   function restartPreview(kind, s) {
-    clearInterval(preview.timer);
     clearInterval(preview.audioTimer);
-    preview.timer = preview.audioTimer = null;
+    preview.audioTimer = null;
+    preview.videoRun++; // laufende Bildschleife beendet sich
     stopListening();
     preview.from = 0;
     preview.lastSeq = 0;
     if (state.tab !== 'preview') return;
     if (kind === 'video') {
       $('videoPreviewInfo').textContent = `${s.flow.label} · ${s.video.format}`;
-      const fps = +$('previewFps').value;
-      fetchFrame();
-      preview.timer = setInterval(fetchFrame, 1000 / fps);
+      preview.shown = [];
+      preview.bytes = [];
+      videoLoop(preview.videoRun);
     } else if (kind === 'audio') {
       $('audioPreviewInfo').textContent = `${s.flow.label} · ${s.audio.format}`;
       buildMeters(s.audio.format);
@@ -919,50 +919,70 @@
     restartPreview(null);
   }
 
-  $('previewFps').addEventListener('change', () => { preview.flowKey = ''; render(); });
+  for (const id of ['previewFps', 'previewWidth', 'previewQuality']) {
+    $(id).addEventListener('change', () => { preview.shown = []; preview.bytes = []; });
+  }
   $('previewFullscreen').addEventListener('click', () => {
     const el = $('previewFrame');
     if (document.fullscreenElement) document.exitFullscreen(); else if (el.requestFullscreen) el.requestFullscreen();
   });
 
+  // Bildschleife mit Gegendruck: das nächste Bild wird erst abgerufen, wenn das vorige gezeichnet ist.
+  async function videoLoop(run) {
+    // Das Messgerät antwortet erst mit einem neueren Bild (Long Polling) und gibt so den Takt vor.
+    while (run === preview.videoRun) {
+      const ok = await fetchFrame();
+      if (!ok) await new Promise(r => setTimeout(r, 200));
+    }
+  }
+
   async function fetchFrame() {
     const id = state.flowId;
+    const overlay = $('previewOverlay');
     try {
-      const res = await fetch(`api/preview/video?flow=${encodeURIComponent(id)}`, { cache: 'no-store' });
-      if (id !== state.flowId) return;
-      const overlay = $('previewOverlay');
-      if (res.status === 204) { overlay.textContent = 'warte auf erstes Bild …'; return; }
-      if (!res.ok) { overlay.textContent = 'keine Vorschau'; return; }
+      const q = `flow=${encodeURIComponent(id)}&width=${$('previewWidth').value}&fps=${$('previewFps').value}` +
+                `&quality=${$('previewQuality').value}&after=${preview.lastSeq}`;
+      const res = await fetch(`api/preview/video?${q}`, { cache: 'no-store' });
+      if (id !== state.flowId) return true;
+      if (res.status === 204) { overlay.textContent = 'warte auf erstes Bild …'; return false; }
+      if (!res.ok) { overlay.textContent = 'keine Vorschau'; return false; }
       const w = +res.headers.get('X-Preview-Width');
       const h = +res.headers.get('X-Preview-Height');
       const seq = +res.headers.get('X-Preview-Sequence');
       const age = +res.headers.get('X-Preview-Age-Ms');
-      const rgb = new Uint8Array(await res.arrayBuffer());
-      if (rgb.length < w * h * 3) return;
-      const off = preview.offscreen;
-      off.width = w; off.height = h;
-      const octx = off.getContext('2d');
-      const img = octx.createImageData(w, h);
-      for (let i = 0, j = 0; i < w * h; i++, j += 3) {
-        img.data[i * 4] = rgb[j]; img.data[i * 4 + 1] = rgb[j + 1]; img.data[i * 4 + 2] = rgb[j + 2]; img.data[i * 4 + 3] = 255;
+      const blob = await res.blob();
+      if (seq === preview.lastSeq) { // in 250 ms kein neues Bild
+        overlay.className = 'preview-overlay' + (age > 1500 ? ' stale' : '');
+        return true;
       }
-      octx.putImageData(img, 0, 0);
+      const bitmap = await createImageBitmap(blob);
       const canvas = $('previewCanvas');
       const dpr = window.devicePixelRatio || 1;
-      canvas.width = Math.round(canvas.clientWidth * dpr);
-      canvas.height = Math.round(canvas.clientHeight * dpr);
+      const cw = Math.round(canvas.clientWidth * dpr), ch = Math.round(canvas.clientHeight * dpr);
+      if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
       const c = canvas.getContext('2d');
       c.fillStyle = '#000';
       c.fillRect(0, 0, canvas.width, canvas.height);
       const scale = Math.min(canvas.width / w, canvas.height / h);
       const dw = w * scale, dh = h * scale;
       c.imageSmoothingEnabled = true;
-      c.drawImage(off, (canvas.width - dw) / 2, (canvas.height - dh) / 2, dw, dh);
-      const stale = seq === preview.lastSeq || age > 1500;
+      c.drawImage(bitmap, (canvas.width - dw) / 2, (canvas.height - dh) / 2, dw, dh);
+      bitmap.close();
       preview.lastSeq = seq;
+      // gemessene Bildrate und Datenrate über die letzten 2 s
+      const now = performance.now();
+      preview.shown.push(now);
+      preview.bytes.push(blob.size);
+      while (preview.shown.length > 1 && now - preview.shown[0] > 2000) { preview.shown.shift(); preview.bytes.shift(); }
+      const span = (now - preview.shown[0]) / 1000;
+      const fps = span > 0 ? (preview.shown.length - 1) / span : 0;
+      const kb = preview.bytes.reduce((a, b) => a + b, 0) / preview.bytes.length / 1024;
+      const stale = age > 1500;
       overlay.className = 'preview-overlay' + (stale ? ' stale' : '');
-      overlay.textContent = `${state.snap && state.snap.flow ? state.snap.flow.label : ''} · ${w}×${h} · Bild ${seq} · Alter ${fmt(age, 0)} ms${stale ? ' · kein neues Bild' : ''}`;
-    } catch (_) { /* nächster Versuch */ }
+      overlay.textContent = `${state.snap && state.snap.flow ? state.snap.flow.label : ''} · ${w}×${h} · ${fmt(fps, 1)} Bilder/s · ` +
+        `${fmt(kb, 0)} kB/Bild · ${fmt(kb * 8 * fps / 1024, 1)} Mbit/s · Alter ${fmt(age, 0)} ms${stale ? ' · kein neues Bild' : ''}`;
+      return true;
+    } catch (_) { return false; /* nächster Versuch */ }
   }
 
   const dbToPct = (db) => Math.max(0, Math.min(100, (db + 60) / 60 * 100));

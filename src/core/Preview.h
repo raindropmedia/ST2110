@@ -2,6 +2,8 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -17,12 +19,25 @@ struct PreviewImage {
     std::vector<uint8_t> rgb;
     uint64_t sequence = 0;
     double timeSec = 0; // Zeitpunkt der Aufnahme (Monitorzeit)
+    std::string jpeg;   // komprimiert (für die Oberfläche); rgb darf danach leer sein
 };
+
+// Gewünschte Vorschau: größte Breite (Bilder werden durch Auslassen verkleinert, nie vergrößert),
+// Bildrate und JPEG-Qualität. Die zuletzt angeforderten Einstellungen gelten.
+struct PreviewSettings {
+    uint32_t maxWidth = 480;
+    double fps = 5;
+    int quality = 80;
+};
+
+// Komprimiert image.rgb als JPEG (Baseline, 4:2:0) nach image.jpeg; false bei Fehlern.
+bool encodeJpeg(PreviewImage& image, int quality);
 
 // Wandelt ein Bild bzw. Halbbild im Transportformat von ST 2110-20 (YCbCr 4:2:2, 10 Bit, RFC 4175:
 // je 2 Pixel 5 Byte Cb Y0 Cr Y1, Big Endian) nach RGB und verkleinert es durch Auslassen auf höchstens
-// maxWidth Pixel Breite. secondField/field: bei Halbbildern (lines = halbe Höhe) wird senkrecht nur halb
-// so stark verkleinert, damit das Seitenverhältnis stimmt. Farbumrechnung BT.709, begrenzter Bereich.
+// maxWidth Pixel Breite. field: bei Halbbildern (lines = halbe Höhe) wird jede Zeile doppelt gezählt,
+// damit das Seitenverhältnis stimmt (volle Auflösung: Zeilenverdopplung). Farbumrechnung BT.709,
+// begrenzter Bereich, über Tabellen.
 // Liefert false bei ungültigen Angaben.
 bool convertRfc4175ToRgb(const uint8_t* frame, size_t frameBytes, uint32_t width, uint32_t lines, bool field,
                          uint32_t maxWidth, PreviewImage& out);
@@ -36,21 +51,27 @@ void renderTestPattern(PreviewImage& out, uint32_t width, uint32_t height, doubl
 // Bilder entstehen nur, solange die Oberfläche sie anfordert (request()), und höchstens alle intervalSec.
 class VideoPreview {
   public:
-    static constexpr double kIntervalSec = 0.2;
     static constexpr double kKeepAliveSec = 3.0;
+    static constexpr double kMaxFps = 50.0;
 
-    void request(double nowSec);
-    // true, wenn ein neues Bild gebraucht wird (angefordert und Intervall abgelaufen).
+    void request(double nowSec, const PreviewSettings& settings = {});
+    PreviewSettings settings() const;
+    // true, wenn ein neues Bild gebraucht wird (angefordert und Intervall 1/fps abgelaufen).
     bool due(double nowSec) const;
     void put(PreviewImage image, double nowSec);
     // Letztes Bild (leer, wenn keines vorliegt).
     PreviewImage latest() const;
+    // Wartet höchstens timeoutSec auf ein Bild mit höherer Nummer als afterSequence und liefert dann
+    // das letzte Bild (Long Polling; den Takt gibt die Bildrate des Messgeräts vor).
+    PreviewImage waitNewer(uint64_t afterSequence, double timeoutSec) const;
 
   private:
     mutable std::mutex mutex_;
+    mutable std::condition_variable newImage_;
     double requestedAt_ = -1e9;
     double lastPut_ = -1e9;
     uint64_t sequence_ = 0;
+    PreviewSettings settings_;
     PreviewImage image_;
 };
 
