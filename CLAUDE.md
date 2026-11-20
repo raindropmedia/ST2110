@@ -17,7 +17,8 @@ Branch `tests/initial-setup`. `st2110-monitor` mit Demo, Web-Oberfläche, Video/
 für mehrere Flows (zur Laufzeit änderbar), Flow-Erkennung (AF_PACKET, SAP), Bild-/Tonvorschau und SDP-Import läuft und ist
 getestet (doctest, Playwright-Screenshots der Oberfläche, Erkennung auf `lo` mit echten Paketen). Der MTL-Pfad
 (`src/mtl/MtlSource.cpp`) kompiliert und linkt gegen MTL v26.09 mit Patch, ist aber nicht auf Hardware
-gelaufen. Referenzkarte E830-XXVDA2 (`8086:12d3`), noch nicht geliefert.
+gelaufen. Referenzkarte E830-XXVDA2, geliefert mit E830-L-Controller (`8086:12de`), Messrechner mit Ubuntu Server 26.04.1;
+MTL noch nicht installiert.
 
 ## Tech-Stack
 

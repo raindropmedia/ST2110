@@ -7,7 +7,7 @@ Schritte vom leeren Rechner bis zur ersten Messung. Die Befehle beziehen sich au
 
 | Punkt | Vorgabe |
 | --- | --- |
-| Karte | E830-XXVDA2 mit E830-CC-Controller, PCI-ID `8086:12d3` |
+| Karte | E830-XXVDA2; geplant E830-CC (`8086:12d3`), geliefert E830-L (`8086:12de`) |
 | Steckplatz | PCIe 4.0 x8 (3.0 x8 reicht für 2 × 25G; x4 bremst) |
 | CPU/NUMA | Karte und isolierte Kerne am selben NUMA-Knoten |
 | Verwaltung | eigene Netzwerkkarte (Onboard) – der Messport gehört DPDK |
@@ -79,7 +79,11 @@ Ohne Sender lässt sich die Kette mit dem Beispielprogramm von MTL auf Port 1 pr
 
 ## Offene Punkte
 
-- [ ] Karte geliefert, Controller-Variante (`12d3`) bestätigt
+- [x] Karte geliefert (2026-11-20): Controller **E830-L SFP** (`8086:12de`), nicht `12d3`; Firmware
+  `1.00 0x80016d80 1.3833.0`, Ubuntu Server 26.04.1, Kernel 7.0.0-44, ice aus dem Kernel
+- [ ] PCIe: Karte steckt in einem Steckplatz mit 5 GT/s x2 (rund 8 Gbit/s brutto) – reicht nicht für
+  2160p, für 2 × 25 GbE nötig: PCIe 4.0 x8 (Steckplatz an der CPU)
+- [ ] E830-L: TSN-Pacing beim Senden und `PTP_SYS_OFFSET_PRECISE` auf der Karte prüfen (MTL testet `12de` nicht)
 - [ ] Firmware-, Treiber- und DPDK-Version notiert (`docs/MESSUNGEN.md`)
 - [ ] Erste Messung gegen bekannten Sender, Abgleich mit EBU LIST
 - [ ] Rechte: Betrieb ohne root (MTL kann das laut Doku, Einrichtung offen)

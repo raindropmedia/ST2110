@@ -6,6 +6,7 @@
 #   scripts/setup-host.sh rmem                 net.core.rmem_max auf 4 MiB (nur für kernel:-Ports)
 #   scripts/setup-host.sh bind <pci>           Port für DPDK an vfio-pci binden (PF, ohne VFs)
 #   scripts/setup-host.sh unbind <pci>         Port zurück an den ice-Treiber geben
+#   scripts/setup-host.sh ddp                  ice.pkg.zst/.xz für DPDK entpacken (bleibt erhalten)
 #
 # "bind" und "unbind" nutzen script/nicctl.sh aus dem MTL-Quellordner (MTL_SRC).
 # Achtung: Ein an vfio-pci gebundener Port verschwindet aus dem Betriebssystem. Nie den Port binden,
@@ -16,7 +17,7 @@ set -euo pipefail
 MTL_SRC="${MTL_SRC:-$HOME/src/Media-Transport-Library}"
 
 usage() {
-	sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+	sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
 	exit 1
 }
 
@@ -73,6 +74,23 @@ bind)
 	done
 	modprobe vfio-pci
 	nicctl bind_pmd "$2"
+	;;
+ddp)
+	# DPDK liest nur das unkomprimierte DDP-Paket; Ubuntu 26.04 liefert ice.pkg.zst.
+	require_root
+	src_dir=/lib/firmware/intel/ice/ddp
+	dst_dir=/lib/firmware/updates/intel/ice/ddp
+	mkdir -p "$dst_dir"
+	if [ -e "$src_dir/ice.pkg.zst" ]; then
+		zstd -d -f "$(readlink -f "$src_dir/ice.pkg.zst")" -o "$dst_dir/ice.pkg"
+	elif [ -e "$src_dir/ice.pkg.xz" ]; then
+		xz -d -k -c "$(readlink -f "$src_dir/ice.pkg.xz")" >"$dst_dir/ice.pkg"
+	else
+		echo "Kein komprimiertes DDP-Paket unter $src_dir gefunden." >&2
+		exit 1
+	fi
+	ls -l "$dst_dir/ice.pkg"
+	echo "Hinweis: Nach einem Update von linux-firmware erneut ausführen."
 	;;
 unbind)
 	require_root

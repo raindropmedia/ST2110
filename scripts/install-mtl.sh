@@ -76,7 +76,7 @@ for step in "${steps[@]}"; do
 		sudo apt-get update
 		sudo apt-get install -y git gcc g++ meson ninja-build cmake python3 python3-pyelftools pkg-config \
 			libnuma-dev libjson-c-dev libpcap-dev libgtest-dev libssl-dev systemtap-sdt-dev llvm clang \
-			flex byacc ethtool pciutils linuxptp "linux-headers-$(uname -r)"
+			flex byacc ethtool pciutils linuxptp unzip wget curl patch zstd "linux-headers-$(uname -r)"
 		;;
 	dpdk)
 		checkout

@@ -130,7 +130,7 @@ Programm als **reiner Netz-Scanner**, auch ohne MTL: `sudo st2110-monitor --disc
 
 ## Hardware
 
-Referenz ist die **Intel E830-XXVDA2** mit E830-CC-Controller (`8086:12d3`), siehe
+Referenz ist die **Intel E830-XXVDA2** (geliefert mit E830-L-Controller, `8086:12de`), siehe
 [ADR 0002](docs/adr/0002-netzwerkkarte-e830.md) und [Inbetriebnahme](docs/hardware/e830-xxvda2.md).
 `scripts/check-e830.sh` prüft den Rechner, `scripts/setup-host.sh` richtet Hugepages und Ports ein.
 

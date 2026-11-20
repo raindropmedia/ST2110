@@ -26,13 +26,13 @@ variant_of() {
 	case "$1" in
 	12d1) echo "E830-CC Backplane" ;;
 	12d2) echo "E830-CC QSFP56" ;;
-	12d3) echo "E830-CC SFP (z. B. E830-XXVDA2)" ;;
+	12d3) echo "E830-CC SFP" ;;
 	12d5) echo "E830-C Backplane" ;;
 	12d8) echo "E830-C QSFP" ;;
 	12da) echo "E830-C SFP" ;;
 	12dc) echo "E830-L Backplane" ;;
 	12dd) echo "E830-L QSFP" ;;
-	12de) echo "E830-L SFP" ;;
+	12de) echo "E830-L SFP (z. B. E830-XXVDA2)" ;;
 	1591) echo "E810-C Backplane" ;;
 	1592) echo "E810-C QSFP" ;;
 	1593) echo "E810-C SFP" ;;
@@ -99,9 +99,14 @@ for dev in /sys/bus/pci/devices/*; do
 				ver=$(ethtool -i "$ifname" 2>/dev/null | awk -F': ' '/^version/ {print $2}')
 				info "ice-Treiber: ${ver:-?}, Firmware: ${fw:-?}"
 				ts=$(ethtool -T "$ifname" 2>/dev/null)
-				phc=$(printf '%s\n' "$ts" | awk -F': ' '/PTP Hardware Clock/ {print $2}')
+				# PTP-Uhr aus sysfs; ethtool ab 6.x schreibt statt "PTP Hardware Clock"
+				# "Hardware timestamp provider index".
+				phc=""
+				for p in "$dev"/ptp/ptp*; do
+					[ -e "$p" ] && phc="/dev/$(basename "$p")" && break
+				done
 				if printf '%s\n' "$ts" | grep -q "hardware-receive"; then
-					ok "Hardware-Zeitstempel beim Empfang, PTP-Uhr: /dev/ptp${phc:-?}"
+					ok "Hardware-Zeitstempel beim Empfang, PTP-Uhr: ${phc:-keine}"
 				else
 					fail "ethtool -T meldet keine Hardware-Zeitstempel beim Empfang"
 				fi
@@ -175,7 +180,19 @@ done
 if [ -n "$ddp" ]; then
 	ok "DDP-Paket: $ddp -> $(readlink -f "$ddp")"
 else
-	warn "kein DDP-Paket (ice.pkg) gefunden"
+	# Neuere Distributionen liefern die Firmware komprimiert (ice.pkg.zst/.xz). Der Kernel entpackt sie
+	# selbst, DPDK liest nur das unkomprimierte ice.pkg und läuft sonst im Safe Mode (wenige Queues, kein
+	# Flow Director).
+	packed=""
+	for f in /lib/firmware/intel/ice/ddp/ice.pkg.zst /lib/firmware/intel/ice/ddp/ice.pkg.xz; do
+		[ -e "$f" ] && packed="$f" && break
+	done
+	if [ -n "$packed" ]; then
+		fail "DDP-Paket nur komprimiert ($packed); DPDK braucht es entpackt:"
+		info "sudo scripts/setup-host.sh ddp"
+	else
+		fail "kein DDP-Paket (ice.pkg) gefunden (Paket linux-firmware)"
+	fi
 fi
 
 echo
