@@ -86,6 +86,12 @@ Ohne Sender lässt sich die Kette mit dem Beispielprogramm von MTL auf Port 1 pr
 - [ ] Messrechner (Stand 2026-11-20): Core i7-4790 (Haswell, 4 Kerne/8 Threads, AVX2, kein ART für
   `PTP_SYS_OFFSET_PRECISE`). Der Steckplatz der Karte hängt am Chipsatz (PCIe 2.0), der x16-Steckplatz an der CPU
   (PCIe 3.0) trägt die Grafikkarte. VT-d im BIOS aus (`DMAR: IOMMU enabled`, aber kein DMAR-Gerät)
+- [x] ice aus Kernel 7.0 übernimmt die Karte: DDP „ICE OS Default Package“ 1.3.43.0 (entpackt mit
+  `setup-host.sh ddp`), PTP initialisiert. Nach einem warmen Neustart war die Karte am Chipsatz-Steckplatz einmal
+  nicht erreichbar (`D3cold to D0`, danach scheinbar „Firmware recovery mode“); ein Kaltstart (Netzstecker) half.
+  Der Steckplatz (Root-Port `00:1c.4`, PCIe 2.0 x4) trainiert nur x2.
+- [ ] `irdma` (RDMA) läuft beim Start 15 s je Port in eine Zeitüberschreitung; wird nicht gebraucht und kann
+  per `blacklist irdma` abgeschaltet werden
 - [ ] E830-L: TSN-Pacing beim Senden und `PTP_SYS_OFFSET_PRECISE` auf der Karte prüfen (MTL testet `12de` nicht)
 - [ ] Firmware-, Treiber- und DPDK-Version notiert (`docs/MESSUNGEN.md`)
 - [ ] Erste Messung gegen bekannten Sender, Abgleich mit EBU LIST
