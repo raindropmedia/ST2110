@@ -136,10 +136,18 @@ echo
 echo "== Betriebssystem"
 cmdline=$(cat /proc/cmdline)
 info "Kernel: $(uname -r)"
+cpu_vendor=$(awk -F': ' '/^vendor_id/ {print $2; exit}' /proc/cpuinfo)
+info "CPU: $(awk -F': ' '/^model name/ {print $2; exit}' /proc/cpuinfo)"
 if [ -n "$(ls -A /sys/class/iommu 2>/dev/null)" ]; then
-	ok "IOMMU aktiv"
+	ok "IOMMU aktiv ($(find /sys/class/iommu -mindepth 1 -maxdepth 1 -printf '%f ' 2>/dev/null))"
+elif [ "$cpu_vendor" = "AuthenticAMD" ]; then
+	fail "IOMMU nicht aktiv (AMD: im BIOS \"IOMMU\" bzw. \"AMD-Vi\" und SVM einschalten; Kernel: iommu=pt)"
 else
-	fail "IOMMU nicht aktiv (BIOS: VT-d; Kernel: intel_iommu=on iommu=pt)"
+	case " $cmdline " in
+	*" intel_iommu=on "*)
+		fail "IOMMU nicht aktiv, obwohl intel_iommu=on gesetzt ist: im BIOS VT-d (\"VT for Direct I/O\") einschalten" ;;
+	*) fail "IOMMU nicht aktiv (BIOS: VT-d; Kernel: intel_iommu=on fehlt in der Kommandozeile)" ;;
+	esac
 fi
 case " $cmdline " in
 *" iommu=pt "*) ok "iommu=pt gesetzt" ;;
