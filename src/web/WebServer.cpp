@@ -34,7 +34,9 @@ bool WebServer::start(const std::string& host, uint16_t port, std::string& error
         return false;
     }
     auto& s = *server_;
-    if (!s.set_mount_point("/", webuiDir_)) {
+    // no-cache: Der Browser fragt jede Datei per ETag erneut an. Sonst hält er nach einem Update eine alte
+    // app.js im Cache, die nicht zur neuen index.html passt.
+    if (!s.set_mount_point("/", webuiDir_, {{"Cache-Control", "no-cache"}})) {
         error = "Ordner der Web-Oberfläche nicht lesbar: " + webuiDir_;
         return false;
     }
