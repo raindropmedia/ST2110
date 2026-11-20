@@ -66,7 +66,8 @@ die Demo simuliert auch weitere Flows im Netz, PTP-Pakete, Zusatzdaten und SAP-A
 ## Bauen
 
 ```bash
-# Entwicklung (jeder Linux-Rechner, ohne MTL): Kern, Tests, Demo, Oberfläche aus webui/
+# Entwicklung (Linux oder macOS, ohne MTL): Kern, Tests, Demo, Oberfläche aus webui/
+# Unter macOS fehlt die Flow-Erkennung (--discover, braucht AF_PACKET); Messen nur unter Linux.
 cmake --preset dev && cmake --build --preset dev && ctest --preset dev
 ./build/dev/st2110-monitor --demo          # http://127.0.0.1:8090/
 

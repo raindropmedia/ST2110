@@ -8,7 +8,6 @@
 #include <cerrno>
 #include <chrono>
 #include <cstring>
-#include <linux/if_packet.h>
 #include <net/ethernet.h>
 #include <net/if.h>
 #include <netinet/in.h>
@@ -16,7 +15,12 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#ifdef __linux__
+#include <linux/if_packet.h>
+#endif
+
 namespace st2110 {
+#ifdef __linux__
 namespace {
 
 constexpr size_t kSnapLength = 160; // reicht für Ethernet, VLAN, IPv4, UDP, RTP und RFC-4175-Köpfe
@@ -27,6 +31,7 @@ std::string errnoText() {
 }
 
 } // namespace
+#endif
 
 Discovery::Discovery(MonitorHub& hub, std::string interfaceName, bool sap)
     : hub_(hub), interface_(std::move(interfaceName)), sap_(sap) {}
@@ -35,6 +40,7 @@ Discovery::~Discovery() {
     stop();
 }
 
+#ifdef __linux__
 bool Discovery::start(std::string& error) {
     const unsigned index = if_nametoindex(interface_.c_str());
     if (index == 0) {
@@ -115,6 +121,17 @@ bool Discovery::start(std::string& error) {
     return true;
 }
 
+#else
+// AF_PACKET gibt es nur unter Linux; unter macOS läuft das Programm nur mit --demo (Entwicklung der
+// Oberfläche).
+bool Discovery::start(std::string& error) {
+    static_cast<void>(hub_);
+    static_cast<void>(sap_);
+    error = "Flow-Erkennung (--discover) gibt es nur unter Linux.";
+    return false;
+}
+#endif
+
 void Discovery::stop() {
     stopping_ = true;
     if (captureThread_.joinable()) {
@@ -133,6 +150,7 @@ void Discovery::stop() {
     }
 }
 
+#ifdef __linux__
 void Discovery::captureLoop() {
     std::array<std::array<uint8_t, kSnapLength>, kBatch> buffers{};
     std::array<iovec, kBatch> iov{};
@@ -204,5 +222,10 @@ void Discovery::sapLoop() {
         }
     }
 }
+
+#else
+void Discovery::captureLoop() {}
+void Discovery::sapLoop() {}
+#endif
 
 } // namespace st2110
