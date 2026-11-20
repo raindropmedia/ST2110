@@ -157,6 +157,29 @@ case " $cmdline " in
 *" isolcpus="*) ok "isolierte CPU-Kerne: $(printf '%s\n' "$cmdline" | tr ' ' '\n' | grep '^isolcpus=')" ;;
 *) warn "keine isolierten CPU-Kerne (isolcpus=…): Messwerte schwanken stärker" ;;
 esac
+# Hyperthreading: Ein isolierter logischer Kern teilt sich den physischen Kern mit seinem Geschwister. Ist
+# das Geschwister nicht isoliert, stört die übrige Last des Systems die Messkerne trotzdem.
+isolated=$(cat /sys/devices/system/cpu/isolated 2>/dev/null)
+if [ -n "$isolated" ]; then
+	expand_list() {
+		local part
+		for part in $(printf '%s' "$1" | tr ',' ' '); do
+			if [[ "$part" == *-* ]]; then seq "${part%-*}" "${part#*-}"; else echo "$part"; fi
+		done
+	}
+	iso_set=" $(expand_list "$isolated" | tr '\n' ' ') "
+	shared=""
+	for cpu in $iso_set; do
+		siblings=$(cat "/sys/devices/system/cpu/cpu$cpu/topology/thread_siblings_list" 2>/dev/null)
+		for sib in $(expand_list "$siblings"); do
+			[[ "$iso_set" == *" $sib "* ]] || shared="$shared $cpu/$sib"
+		done
+	done
+	if [ -n "$shared" ]; then
+		warn "isolierte Kerne teilen sich den physischen Kern mit nicht isolierten (isoliert/Geschwister):$shared"
+		info "Geschwister mit isolieren oder Hyperthreading im BIOS abschalten (lscpu -e zeigt die Zuordnung)"
+	fi
+fi
 
 hp_total=$(awk '/^HugePages_Total/ {print $2}' /proc/meminfo)
 hp_free=$(awk '/^HugePages_Free/ {print $2}' /proc/meminfo)

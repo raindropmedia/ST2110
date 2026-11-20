@@ -83,6 +83,9 @@ Ohne Sender lässt sich die Kette mit dem Beispielprogramm von MTL auf Port 1 pr
   `1.00 0x80016d80 1.3833.0`, Ubuntu Server 26.04.1, Kernel 7.0.0-44, ice aus dem Kernel
 - [ ] PCIe: Karte steckt in einem Steckplatz mit 5 GT/s x2 (rund 8 Gbit/s brutto) – reicht nicht für
   2160p, für 2 × 25 GbE nötig: PCIe 4.0 x8 (Steckplatz an der CPU)
+- [ ] Messrechner (Stand 2026-11-20): Core i7-4790 (Haswell, 4 Kerne/8 Threads, AVX2, kein ART für
+  `PTP_SYS_OFFSET_PRECISE`). Der Steckplatz der Karte hängt am Chipsatz (PCIe 2.0), der x16-Steckplatz an der CPU
+  (PCIe 3.0) trägt die Grafikkarte. VT-d im BIOS aus (`DMAR: IOMMU enabled`, aber kein DMAR-Gerät)
 - [ ] E830-L: TSN-Pacing beim Senden und `PTP_SYS_OFFSET_PRECISE` auf der Karte prüfen (MTL testet `12de` nicht)
 - [ ] Firmware-, Treiber- und DPDK-Version notiert (`docs/MESSUNGEN.md`)
 - [ ] Erste Messung gegen bekannten Sender, Abgleich mit EBU LIST
