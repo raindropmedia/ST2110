@@ -24,6 +24,9 @@ PATCH_DIR="$REPO_ROOT/patches/mtl/$MTL_VERSION"
 steps=("$@")
 [ "${#steps[@]}" -gt 0 ] || steps=(packages dpdk ice mtl)
 
+# Fehlwarnungen neuerer GCC-Versionen, die MTL mit -Werror sonst zum Fehler macht
+MTL_GCC_RELAX="-Wno-error=format-truncation -Wno-error=stringop-truncation -Wno-error=stringop-overflow -Wno-error=array-bounds"
+
 log() { printf '\n==> %s\n' "$*"; }
 
 need_ubuntu() {
@@ -94,7 +97,12 @@ for step in "${steps[@]}"; do
 		log "Eigene Patches anwenden"
 		apply_patches
 		log "MTL bauen und installieren"
-		(cd "$MTL_SRC" && ./build.sh)
+		# MTL baut ohne debug mit -Werror. GCC 15 (Ubuntu 26.04) meldet dabei Fehlwarnungen, z. B.
+		# format-truncation in st40_pipeline_rx.c (Index ist auf MTL_SESSION_PORT_MAX begrenzt, GCC sieht
+		# das nicht). Diese Warnungen bleiben sichtbar, brechen den Bau aber nicht ab. Meson liest CFLAGS
+		# nur beim ersten Einrichten, deshalb die Build-Ordner vorher entfernen.
+		rm -rf "$MTL_SRC/build" "$MTL_SRC/tests/tools/RxTxApp/build"
+		(cd "$MTL_SRC" && CFLAGS="${CFLAGS:-} $MTL_GCC_RELAX" CXXFLAGS="${CXXFLAGS:-} $MTL_GCC_RELAX" ./build.sh)
 		sudo ldconfig
 		;;
 	*)
