@@ -19,7 +19,18 @@ Schritte vom leeren Rechner bis zur ersten Messung. Die Befehle beziehen sich au
 - VT-d (IOMMU) einschalten, SR-IOV nach Bedarf.
 - Energiesparfunktionen für die Messkerne reduzieren (C-States, Turbo nach Bedarf festlegen).
 
-## 3. Betriebssystem (Ubuntu 24.04)
+## 3. Betriebssystem (Ubuntu Server 24.04 oder 26.04 LTS)
+
+MTL v26.09 unterstützt beide; die Hardware-Tests von MTL laufen auf 24.04 (Kernel 6.8). Der Messplatz der HSD
+läuft mit Ubuntu Server 26.04.1. Ohne Desktop installieren, den Kernel festhalten und Updates nur bewusst einspielen
+(danach `scripts/install-mtl.sh ice`):
+
+```bash
+sudo apt-mark hold linux-image-generic linux-headers-generic linux-generic
+grep -E 'CONFIG_NO_HZ_FULL|CONFIG_VFIO_PCI=' /boot/config-$(uname -r)   # nohz_full und vfio-pci müssen da sein
+```
+
+Ohne `CONFIG_NO_HZ_FULL=y` wirkt `nohz_full` nicht (MTL `doc/isolation.md`).
 
 Kernel-Kommandozeile in `/etc/default/grub` (`GRUB_CMDLINE_LINUX_DEFAULT`), Kerne an die Maschine anpassen:
 
