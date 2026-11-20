@@ -105,6 +105,11 @@ for dev in /sys/bus/pci/devices/*; do
 				for p in "$dev"/ptp/ptp*; do
 					[ -e "$p" ] && phc="/dev/$(basename "$p")" && break
 				done
+				# Die E8xx hat eine Uhr je Karte; sysfs zeigt sie nur am Port, der sie besitzt (meist Port 0).
+				if [ -z "$phc" ]; then
+					idx=$(printf '%s\n' "$ts" | awk -F': ' '/PTP Hardware Clock|Hardware timestamp provider index/ {print $2; exit}')
+					[[ "$idx" =~ ^[0-9]+$ ]] && phc="/dev/ptp$idx (Uhr der Karte, gehört zu einem anderen Port)"
+				fi
 				if printf '%s\n' "$ts" | grep -q "hardware-receive"; then
 					ok "Hardware-Zeitstempel beim Empfang, PTP-Uhr: ${phc:-keine}"
 				else
