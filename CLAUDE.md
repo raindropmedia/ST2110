@@ -13,15 +13,16 @@ Einsatz: Studio und Lehre an der HSD; Vorarbeit für ST 2110 im Studio-Gateway (
 
 ## Aktueller Stand
 
-Branch `tests/initial-setup`. `st2110-monitor` mit Demo, Web-Oberfläche, Video/Ton/PTP/2022-7-Auswertung
-für mehrere Flows (zur Laufzeit änderbar), Flow-Erkennung (AF_PACKET, SAP), Bild-/Tonvorschau und SDP-Import läuft und ist
-getestet (doctest, Playwright-Screenshots der Oberfläche, Erkennung auf `lo` mit echten Paketen). Der MTL-Pfad
-(`src/mtl/MtlSource.cpp`) kompiliert und linkt gegen MTL v26.09 mit Patch, ist aber nicht auf Hardware
-gelaufen. Referenzkarte E830-XXVDA2, geliefert mit E830-L-Controller (`8086:12de`), Messrechner mit Ubuntu Server 26.04.1;
-MTL v26.09 ist installiert, Empfang und PTP laufen auf der Karte; Testsender (Tab „Testsender“) und Erkennung am
-Verwaltungsport sind gebaut und getestet (doctest inkl. ThreadSanitizer-Lauf der Verwaltung, Oberfläche im Demo-Betrieb),
-das Senden und der Empfang laufen auf der Karte (erste Messung in `docs/MESSUNGEN.md`: keine Verluste, Sender mit
-Ratenbegrenzung „wide“; TSN-Pacing und `start-vrx` zu prüfen).
+Branch `tests/initial-setup`. `st2110-monitor` mit Demo, Web-Oberfläche, Video/Ton/PTP/2022-7-Auswertung für mehrere
+Flows (zur Laufzeit änderbar), Flow-Erkennung (AF_PACKET, SAP; am Verwaltungsport automatisch), Bild-/Tonvorschau,
+SDP-Import und Testsender (Tab „Testsender“) ist getestet (doctest inkl. ThreadSanitizer-Lauf der Sender-Verwaltung,
+Playwright-Screenshots der Oberfläche).
+
+Hardware: Referenzkarte E830-XXVDA2, geliefert mit E830-L-Controller (`8086:12de`) im CPU-Steckplatz eines i7-4790,
+Ubuntu Server 26.04.1, MTL v26.09 mit drei Patches (`patches/mtl/v26.09/`), Switch MikroTik CRS309 ohne PTP-Funktion.
+Empfang, Senden und PTP laufen; erste Messung in `docs/MESSUNGEN.md`: keine Verluste, der Testsender mit
+Ratenbegrenzung ist „wide“ (Pakete rund 15 Paketzeiten zu früh). Zu prüfen: TSN-Pacing (`--tx-pacing tsn`) und
+`start-vrx`, dann Abgleich mit EBU LIST.
 
 ## Tech-Stack
 
