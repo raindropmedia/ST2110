@@ -130,7 +130,21 @@ for dev in /sys/bus/pci/devices/*; do
 		ok "an vfio-pci gebunden (DPDK)"
 		;;
 	iavf) info "VF im Kernel (für MTL an vfio-pci binden)" ;;
-	-) warn "kein Treiber gebunden" ;;
+	-)
+		warn "kein Treiber gebunden"
+		# Häufige Ursachen stehen im Kernel-Log (dmesg braucht unter Ubuntu root)
+		pci=$(basename "$dev")
+		log=$(dmesg 2>/dev/null | grep -F "$pci")
+		if [ -z "$log" ]; then
+			info "Kernel-Log nicht lesbar (mit sudo ausführen) oder ohne Einträge zu $pci"
+		fi
+		if printf '%s\n' "$log" | grep -q "D3cold to D0"; then
+			fail "Karte war beim Start über PCIe nicht erreichbar (D3cold); anderen Steckplatz (an der CPU) nehmen, kalt starten"
+		fi
+		if printf '%s\n' "$log" | grep -q "recovery mode"; then
+			fail "ice meldet Firmware-Recovery-Modus (am Chipsatz-Steckplatz eine Folge der unerreichbaren Karte)"
+		fi
+		;;
 	*) warn "unerwarteter Treiber: $driver" ;;
 	esac
 done
