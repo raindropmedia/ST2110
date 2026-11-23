@@ -26,6 +26,10 @@ class PtpMonitor {
         // Ohne sie meldete ein einzelner Ausreißer knapp über lockThresholdNs sofort "nicht eingerastet"
         // und nach acht Syncs wieder "eingerastet" (Switch ohne PTP-Unterstützung: Streuung um 1 µs).
         double unlockThresholdNs = 2000;
+        // Korrekturen ab dieser Größe sind Zeitsprünge (beim ersten Sync stellt MTL die Uhr um den
+        // UTC-TAI-Versatz von 37 s). Sie zählen für sich und gehen nicht in Verlauf, Histogramm und Maximum
+        // ein, sonst zeigt "max" bis zum Zurücksetzen 37 s.
+        double stepThresholdNs = 1e6;
         double timeoutSec = 3.0; // ohne Sync länger als das: "kein Sync"
     };
 
@@ -39,6 +43,8 @@ class PtpMonitor {
     int16_t utcOffset() const { return utcOffset_; }
     bool hasSync() const { return syncs_ > 0; }
     int64_t lastDeltaNs() const { return lastDelta_; }
+    uint64_t steps() const { return steps_; }
+    int64_t lastStepNs() const { return lastStep_; }
     double lastSyncSec() const { return lastSyncSec_; }
 
     const Range& totalDelta() const { return total_; }
@@ -57,6 +63,8 @@ class PtpMonitor {
     double lastSyncSec_ = 0;
     std::deque<int64_t> recent_;
     bool locked_ = false;
+    uint64_t steps_ = 0;
+    int64_t lastStep_ = 0;
     Range total_;
     Range interval_;
     Histogram histogram_;

@@ -38,6 +38,13 @@ void PtpMonitor::onSync(double nowSec, int64_t deltaNs, int16_t utcOffset) {
         recent_.pop_front();
     }
     const auto magnitude = static_cast<double>(std::llabs(deltaNs));
+    if (magnitude >= settings_.stepThresholdNs) {
+        ++steps_;
+        lastStep_ = deltaNs;
+        locked_ = false;
+        recent_.clear(); // nach einem Zeitsprung von vorn einrasten
+        return;
+    }
     if (locked_) {
         if (magnitude >= std::max(settings_.unlockThresholdNs, settings_.lockThresholdNs)) {
             locked_ = false;
@@ -80,6 +87,8 @@ nlohmann::json PtpMonitor::toJson(double nowSec, double windowSec, size_t maxPoi
         {"sinceLastSyncSec", syncs_ ? nlohmann::json(nowSec - lastSyncSec_) : nlohmann::json(nullptr)},
         {"lockThresholdNs", settings_.lockThresholdNs},
         {"unlockThresholdNs", settings_.unlockThresholdNs},
+        {"steps", steps_},
+        {"lastStepNs", steps_ ? nlohmann::json(lastStep_) : nlohmann::json(nullptr)},
         {"deltaNs", rangeToJson(total_)},
         {"histogram", histogramToJson(histogram_)},
         {"series", series_.toJson(windowSec, maxPoints)},

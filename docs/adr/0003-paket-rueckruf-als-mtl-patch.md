@@ -20,6 +20,15 @@ Kopien. Die Makros `ST20_RX_TP_PACKET_HOOK`/`ST30_RX_TP_PACKET_HOOK` zeigen an, 
 ist; ohne Patch baut und läuft das Programm ohne Paketansichten. `scripts/install-mtl.sh` wendet den
 Patch vor dem Bau an.
 
+## Zweiter Patch: PTP stellt die Uhr nur auf Port P nach (2026-11-23)
+
+`0002-st2110-PTP-only-steers-the-clock-on-port-P-of-a-shar.patch`: Beide Ports einer Intel-E8xx-Karte lesen und
+stellen denselben Quell-Timer. MTL startet je Port eine PTP-Instanz (auch auf dem reinen Sendeport des
+Testsenders), und jede korrigierte denselben Fehler, der Fehler wurde zweimal ausgeglichen. Der Patch lässt
+`ptp_adjust_delta` die Uhr nur auf Port P ändern, wenn der zweite Port dieselbe PCI-Karte ist (gleiches
+`dddd:bb:dd`, Treiber `ice`); dessen Instanz misst weiter. Keine Schnittstelle zum Programm, deshalb kein
+Erkennungsmakro. Auf Hardware noch nicht bestätigt (siehe `docs/MESSUNGEN.md`).
+
 ## Begründung
 
 - 38 Zeilen in vier Dateien, keine Änderung an bestehendem Verhalten.

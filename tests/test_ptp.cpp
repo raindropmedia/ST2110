@@ -51,6 +51,31 @@ TEST_CASE("PTP-Zustand: Hysterese gegen Flackern bei Streuung um 1 µs") {
     CHECK(ptp.state(t) == PtpState::Locked);
 }
 
+TEST_CASE("PTP: Zeitsprung beim ersten Sync geht nicht in die Statistik") {
+    PtpMonitor ptp;
+    double t = 0;
+    ptp.onSync(t += 0.125, 37000356475, 37); // UTC → TAI beim ersten Sync
+    CHECK(ptp.steps() == 1);
+    CHECK(ptp.lastStepNs() == 37000356475);
+    CHECK(ptp.lastDeltaNs() == 37000356475);
+    CHECK(ptp.state(t) == PtpState::Syncing);
+    CHECK(ptp.totalDelta().empty());
+    for (int i = 0; i < 8; ++i) {
+        ptp.onSync(t += 0.125, 300, 37);
+    }
+    CHECK(ptp.state(t) == PtpState::Locked);
+    CHECK(ptp.totalDelta().count() == 8);
+    CHECK(ptp.totalDelta().max() == 300); // nicht 37 s
+    const auto json = ptp.toJson(t, 60.0, 100);
+    CHECK(json["steps"] == 1);
+    CHECK(json["lastStepNs"] == 37000356475);
+    CHECK(json["histogram"]["count"] == 8);
+    // Ein späterer Sprung rastet aus und zählt weiter
+    ptp.onSync(t += 0.125, -2000000, 37);
+    CHECK(ptp.steps() == 2);
+    CHECK(ptp.state(t) == PtpState::Syncing);
+}
+
 TEST_CASE("PTP-Zustand: nach einer Lücke wieder von vorn einrasten") {
     PtpMonitor ptp;
     double t = 0;

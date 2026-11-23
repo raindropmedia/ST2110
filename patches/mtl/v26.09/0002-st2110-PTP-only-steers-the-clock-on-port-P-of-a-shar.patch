@@ -1,0 +1,55 @@
+From 148d1d766237937d4e6f419f60f6ebc4af7a699a Mon Sep 17 00:00:00 2001
+From: ST2110 Messplatz <noreply@anthropic.com>
+Date: Mon, 23 Nov 2026 16:40:24 +0000
+Subject: [PATCH] st2110: PTP only steers the clock on port P of a shared-timer
+ NIC
+
+Both ports of an Intel E810/E830 read and adjust the same source timer.
+With one PTP instance per port every sync corrected the same error twice,
+so the correction no longer converged below the measurement noise.
+Only port P adjusts now; the instance of the second port of the same PCI
+device keeps measuring.
+---
+ lib/src/mt_ptp.c | 23 +++++++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/lib/src/mt_ptp.c b/lib/src/mt_ptp.c
+index 3ebcf43..f4c1461 100644
+--- a/lib/src/mt_ptp.c
++++ b/lib/src/mt_ptp.c
+@@ -474,9 +474,32 @@ static void ptp_calculate_coefficient(struct mt_ptp_impl* ptp, int64_t delta) {
+       delta, ptp->coefficient, ts_m);
+ }
+ 
++/*
++ * Beide Ports einer Intel-E8xx-Karte lesen und stellen denselben Quell-Timer (shared source timer,
++ * DPDK ice_timesync_*). Hat jeder Port seine eigene PTP-Instanz, korrigiert jede denselben Fehler: der
++ * Fehler wird zweimal ausgeglichen und schwingt um die Messunsicherheit herum. Nur Port P stellt nach;
++ * die Instanz des zweiten Ports misst weiter (Statistik), ändert die Uhr aber nicht.
++ * Erkannt wird "gleiche Karte" an der PCI-Adresse (gleiches dddd:bb:dd, andere Funktion).
++ */
++/* PCI-Adresse "dddd:bb:dd.f": gleiche Länge, Punkt an vorletzter Stelle, alles davor gleich */
++static bool ptp_same_pci_device(const char* a, const char* b) {
++  size_t len = strlen(a);
++  if (len < 3 || len != strlen(b) || a[len - 2] != '.') return false;
++  return strncmp(a, b, len - 1) == 0;
++}
++
++static bool ptp_shares_timer_with_primary(struct mt_ptp_impl* ptp) {
++  if (ptp->port == MTL_PORT_P) return false;
++  if (mt_if(ptp->impl, ptp->port)->drv_info.drv_type != MT_DRV_ICE) return false;
++  struct mtl_init_params* p = mt_get_user_params(ptp->impl);
++  return ptp_same_pci_device(p->port[MTL_PORT_P], p->port[ptp->port]);
++}
++
+ static void ptp_adjust_delta(struct mt_ptp_impl* ptp, int64_t delta, bool error_correct) {
+   MTL_MAY_UNUSED(error_correct);
+ 
++  if (ptp_shares_timer_with_primary(ptp)) return;
++
+ #ifdef MTL_HAS_DPDK_TIMESYNC_ADJUST_FREQ
+   double ppb;
+   enum servo_state state = UNLOCKED;
+-- 
+2.43.0
+

@@ -21,7 +21,18 @@ Jede Messung mit Datum, Aufbau und Versionen festhalten. Rohdaten (`*.jsonl`) ge
 
 ## Ergebnisse
 
-Noch keine Messungen auf Hardware.
+Noch keine Messungen von Strömen. Beobachtungen beim Einrichten (2026-11-23, i7-4790, E830-L, Ubuntu 26.04.1,
+Kernel 7.0, MTL v26.09, DPDK 26.07, Switch MikroTik CRS309 ohne PTP-Funktion, Grandmaster ST 2059-2, Domäne 127):
+
+- **PTP im Betrieb:** `ptp4l` am Kernel-Port: 20–30 ns rms, Laufzeit rund 5 µs. Mit MTL streut die Korrektur
+  je Sync um ±1,0–1,4 µs (`correct_delta` −1357 … +1454 ns auf beiden Ports) und liegt oft knapp über der
+  Einrastschwelle von 1000 ns. Der erste Sync stellt die Uhr um 37 s (UTC → TAI); das zählt als Zeitsprung.
+- **Verdacht (noch zu bestätigen):** Beide Ports der E830 teilen sich einen Quell-Timer (DPDK `ice`:
+  „shared source timer“); MTL startet je Port eine PTP-Instanz, und beide stellen denselben Timer nach. Hinweis
+  im Log: Port 1 sieht nach dem Start keinen 37-s-Sprung, Port 0 schon. Gegenprobe: Start ohne `--tx-port`
+  (nur eine Instanz) oder mit `patches/mtl/v26.09/0002-…`; dann sollte die Streuung deutlich sinken.
+- **`--lcores 2,3`:** MTL übergibt `-l 0,2,3` und DPDK nummeriert die Kerne neu (`--remap-lcore-ids`); „lcore 1“ im
+  Log ist damit CPU 2. Ohne die Angabe lief der Scheduler auf CPU 1, die nicht isoliert war.
 
 ## Offene Prüffragen
 
