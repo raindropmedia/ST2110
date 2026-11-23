@@ -490,6 +490,8 @@ struct MtlSource::Impl {
     std::vector<std::unique_ptr<FlowSession>> sessions;
     std::atomic<bool> stopping{false};
     std::thread statsThread;
+    std::thread txStarter;
+    std::mutex txMutex; // schützt txSessions
     std::unique_ptr<PreviewWorker> previewWorker = std::make_unique<PreviewWorker>();
     std::vector<std::unique_ptr<TxSession>> txSessions;
 
@@ -500,6 +502,9 @@ struct MtlSource::Impl {
         if (statsThread.joinable()) {
             statsThread.join();
         }
+        if (txStarter.joinable()) {
+            txStarter.join(); // kann bis zum Ende der PTP-Wartezeit von MTL dauern
+        }
         txSessions.clear();    // Sendethreads beenden, Sitzungen freigeben
         previewWorker.reset(); // offene Rahmen werden noch zurückgegeben
         for (auto& s : sessions) {
@@ -508,6 +513,28 @@ struct MtlSource::Impl {
         sessions.clear();
         if (mtl != nullptr) {
             mtl_uninit(mtl);
+        }
+    }
+
+    void startTestSender() {
+        if (options.ptp) {
+            hub.addEvent("info", "Testsender wartet, bis PTP eingerastet ist (höchstens 3 min).");
+        }
+        for (const auto& flow : options.txFlows) {
+            if (stopping) {
+                return;
+            }
+            auto tx = std::make_unique<TxSession>();
+            tx->flow = flow;
+            std::string txError;
+            if (!tx->open(mtl, options.txPort->port, txError)) {
+                hub.addEvent("error", "Testsender " + flow.label + ": " + txError);
+                continue;
+            }
+            hub.addEvent("info", "Testsender " + flow.label + " sendet " + flow.formatName() + " an " +
+                                     flow.primary().ip + ":" + std::to_string(flow.primary().udpPort));
+            std::lock_guard lock(txMutex);
+            txSessions.push_back(std::move(tx));
         }
     }
 
@@ -717,20 +744,13 @@ std::unique_ptr<MtlSource> MtlSource::create(const Options& options, MonitorHub&
             return nullptr;
         }
     }
-    for (const auto& flow : options.txFlows) {
-        auto tx = std::make_unique<TxSession>();
-        tx->flow = flow;
-        std::string txError;
-        if (!tx->open(source->impl_->mtl, options.txPort->port, txError)) {
-            error = "Testsender " + flow.label + ": " + txError;
-            return nullptr;
-        }
-        hub.addEvent("info", "Testsender " + flow.label + " sendet " + flow.formatName() + " an " +
-                                 flow.primary().ip + ":" + std::to_string(flow.primary().udpPort));
-        source->impl_->txSessions.push_back(std::move(tx));
-    }
     Impl* raw = source->impl_.get();
     source->impl_->statsThread = std::thread([raw] { raw->statsLoop(); });
+    // Mit PTP wartet st20p_tx_create, bis PTP eingerastet ist (MTL: bis 180 s). Der Testsender startet
+    // deshalb im Hintergrund, damit Empfang und Web-Oberfläche sofort laufen.
+    if (!options.txFlows.empty()) {
+        source->impl_->txStarter = std::thread([raw] { raw->startTestSender(); });
+    }
     return source;
 }
 
