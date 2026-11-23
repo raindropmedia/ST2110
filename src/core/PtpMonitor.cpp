@@ -24,6 +24,11 @@ PtpMonitor::PtpMonitor() : PtpMonitor(Settings{}) {}
 PtpMonitor::PtpMonitor(Settings settings) : settings_(settings), histogram_(-2000.0, 2000.0, 200) {}
 
 void PtpMonitor::onSync(double nowSec, int64_t deltaNs, int16_t utcOffset) {
+    if (syncs_ > 0 && nowSec - lastSyncSec_ > settings_.timeoutSec) {
+        // Nach einer Lücke von neuem einrasten
+        locked_ = false;
+        recent_.clear();
+    }
     ++syncs_;
     utcOffset_ = utcOffset;
     lastDelta_ = deltaNs;
@@ -31,6 +36,16 @@ void PtpMonitor::onSync(double nowSec, int64_t deltaNs, int16_t utcOffset) {
     recent_.push_back(deltaNs);
     while (recent_.size() > settings_.lockSamples) {
         recent_.pop_front();
+    }
+    const auto magnitude = static_cast<double>(std::llabs(deltaNs));
+    if (locked_) {
+        if (magnitude >= std::max(settings_.unlockThresholdNs, settings_.lockThresholdNs)) {
+            locked_ = false;
+        }
+    } else if (recent_.size() >= settings_.lockSamples) {
+        locked_ = std::all_of(recent_.begin(), recent_.end(), [&](int64_t d) {
+            return static_cast<double>(std::llabs(d)) < settings_.lockThresholdNs;
+        });
     }
     total_.add(static_cast<double>(deltaNs));
     interval_.add(static_cast<double>(deltaNs));
@@ -42,13 +57,7 @@ PtpState PtpMonitor::state(double nowSec) const {
     if (syncs_ == 0 || nowSec - lastSyncSec_ > settings_.timeoutSec) {
         return PtpState::NoSync;
     }
-    if (recent_.size() < settings_.lockSamples) {
-        return PtpState::Syncing;
-    }
-    const bool locked = std::all_of(recent_.begin(), recent_.end(), [&](int64_t d) {
-        return static_cast<double>(std::llabs(d)) < settings_.lockThresholdNs;
-    });
-    return locked ? PtpState::Locked : PtpState::Syncing;
+    return locked_ ? PtpState::Locked : PtpState::Syncing;
 }
 
 Range PtpMonitor::takeInterval() {
@@ -70,6 +79,7 @@ nlohmann::json PtpMonitor::toJson(double nowSec, double windowSec, size_t maxPoi
         {"lastDeltaNs", syncs_ ? nlohmann::json(lastDelta_) : nlohmann::json(nullptr)},
         {"sinceLastSyncSec", syncs_ ? nlohmann::json(nowSec - lastSyncSec_) : nlohmann::json(nullptr)},
         {"lockThresholdNs", settings_.lockThresholdNs},
+        {"unlockThresholdNs", settings_.unlockThresholdNs},
         {"deltaNs", rangeToJson(total_)},
         {"histogram", histogramToJson(histogram_)},
         {"series", series_.toJson(windowSec, maxPoints)},

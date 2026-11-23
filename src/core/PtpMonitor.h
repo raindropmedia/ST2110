@@ -22,7 +22,11 @@ class PtpMonitor {
     struct Settings {
         double lockThresholdNs = 1000; // |delta| darunter gilt als eingerastet
         size_t lockSamples = 8;        // so viele aufeinanderfolgende Syncs unter der Schwelle
-        double timeoutSec = 3.0;       // ohne Sync länger als das: "kein Sync"
+        // Hysterese: Ein eingerasteter Zustand geht erst verloren, wenn ein Sync diese Schwelle erreicht.
+        // Ohne sie meldete ein einzelner Ausreißer knapp über lockThresholdNs sofort "nicht eingerastet"
+        // und nach acht Syncs wieder "eingerastet" (Switch ohne PTP-Unterstützung: Streuung um 1 µs).
+        double unlockThresholdNs = 2000;
+        double timeoutSec = 3.0; // ohne Sync länger als das: "kein Sync"
     };
 
     PtpMonitor();
@@ -52,6 +56,7 @@ class PtpMonitor {
     int64_t lastDelta_ = 0;
     double lastSyncSec_ = 0;
     std::deque<int64_t> recent_;
+    bool locked_ = false;
     Range total_;
     Range interval_;
     Histogram histogram_;

@@ -16,7 +16,7 @@ TEST_CASE("PTP-Zustand: kein Sync, synchronisiert, eingerastet, Zeitüberschreit
     }
     CHECK(ptp.state(t) == PtpState::Locked);
     CHECK(ptp.utcOffset() == 37);
-    ptp.onSync(t + 0.1, 5000, 37);
+    ptp.onSync(t + 0.1, 5000, 37); // weit über der Hysterese: Lock verloren
     CHECK(ptp.state(t + 0.1) == PtpState::Syncing);
     CHECK(ptp.state(t + 10.0) == PtpState::NoSync);
     CHECK(ptp.syncCount() == 10);
@@ -26,6 +26,42 @@ TEST_CASE("PTP-Zustand: kein Sync, synchronisiert, eingerastet, Zeitüberschreit
     auto interval = ptp.takeInterval();
     CHECK(interval.count() == 10);
     CHECK(ptp.takeInterval().empty());
+}
+
+TEST_CASE("PTP-Zustand: Hysterese gegen Flackern bei Streuung um 1 µs") {
+    PtpMonitor ptp;
+    double t = 0;
+    for (int i = 0; i < 9; ++i) {
+        ptp.onSync(t += 0.125, 800, 37);
+    }
+    REQUIRE(ptp.state(t) == PtpState::Locked);
+    // Ausreißer knapp über der Einrastschwelle (1000 ns), aber unter der Ausrastschwelle (2000 ns)
+    for (int64_t d : {1116, 1366, -1259, 900, 1081}) {
+        ptp.onSync(t += 0.125, d, 37);
+        CHECK(ptp.state(t) == PtpState::Locked);
+    }
+    // Ein Wert ab 2000 ns rastet aus, danach braucht es acht Syncs unter 1000 ns
+    ptp.onSync(t += 0.125, 2000, 37);
+    CHECK(ptp.state(t) == PtpState::Syncing);
+    for (int i = 0; i < 7; ++i) {
+        ptp.onSync(t += 0.125, 900, 37);
+        CHECK(ptp.state(t) == PtpState::Syncing);
+    }
+    ptp.onSync(t += 0.125, 900, 37);
+    CHECK(ptp.state(t) == PtpState::Locked);
+}
+
+TEST_CASE("PTP-Zustand: nach einer Lücke wieder von vorn einrasten") {
+    PtpMonitor ptp;
+    double t = 0;
+    for (int i = 0; i < 9; ++i) {
+        ptp.onSync(t += 0.125, 100, 37);
+    }
+    REQUIRE(ptp.state(t) == PtpState::Locked);
+    t += 10.0; // länger als die Zeitüberschreitung
+    CHECK(ptp.state(t) == PtpState::NoSync);
+    ptp.onSync(t, 100, 37);
+    CHECK(ptp.state(t) == PtpState::Syncing);
 }
 
 TEST_CASE("Pfadversatz ordnet Bilder über RTP zu") {

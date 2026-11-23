@@ -589,7 +589,7 @@
     $('ptpTiles').innerHTML = [
       tile(p.state, 'Zustand', ptpLabel[p.state], [
         ['letzter Sync vor', p.sinceLastSyncSec !== null ? fmt(p.sinceLastSyncSec, 2) + ' s' : '–'],
-        ['Schwelle eingerastet', '< ' + fmt(p.lockThresholdNs, 0) + ' ns']]),
+        ['Einrasten / Ausrasten', '< ' + fmt(p.lockThresholdNs, 0) + ' ns (8 Syncs) / ≥ ' + fmt(p.unlockThresholdNs, 0) + ' ns']]),
       tile(p.state, 'Letzte Korrektur', p.lastDeltaNs !== null ? fmt(p.lastDeltaNs, 0) + ' ns' : '–', [
         ['min / mittel / max', p.deltaNs ? rangeText(p.deltaNs, 1, 0) + ' ns' : '–']]),
       tile('', 'UTC-Versatz Grandmaster', p.utcOffset !== null ? p.utcOffset + ' s' : '–', [['Syncs', fmt(p.syncs, 0)]]),
