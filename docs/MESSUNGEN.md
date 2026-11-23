@@ -54,6 +54,29 @@ Kernel 7.0, MTL v26.09, DPDK 26.07, Switch MikroTik CRS309 ohne PTP-Funktion, Gr
   Erwartetes VRX = Vorlauf − Laufzeit/TRS = 5 − 7,2/4,666 = 3,46 Pakete, gemessen p50 3,5; erwarteter Vorsprung
   23,3 − 7,2 = 16,1 µs, gemessen rund 17 µs. Die negativen VRX-Werte um −30 aus dem Lauf mit Ratenbegrenzung kamen nicht
   wieder.
+- **Weitere Formate mit TSN-Pacing (2026-11-23, Oberfläche, jeweils „narrow“, keine Verluste, keine beschädigten Bilder):**
+
+  | Format | IPT p50 / p99 | VRX min/max | FPT | Latenz | RTP-Offset |
+  | --- | --- | --- | --- | --- | --- |
+  | 1920x1080p50 | 4,66 / 5,03 µs | 1 / 3 | 751,6 µs | 7,2 µs | 67 |
+  | 1920x1080p59.94 | 3,89 / 5,20 µs | 2 / 4 | 623,6 µs | 1,4 µs | 56 |
+  | 1920x1080p100 | 2,31 / 3,13 µs | 6 / 9 | 362,2 µs | 6,7 µs | 32 |
+  | 1920x1080i50 | 9,33 / 10,94 µs | 4 / 5 | 739,8 µs | 6,5 µs | 66 |
+  | 1280x720p50 | 10,49 / 12,09 µs | 5 / 5 | 695,8 µs | 6,9 µs | 62 |
+
+  Die IPT-Mediane entsprechen dem jeweiligen TRS (4,67; 3,89; 2,33; 9,33; 10,50 µs). Bei 1080i50 und 720p50 gilt die
+  Beziehung VRX ≈ Vorlauf − Laufzeit/TRS weiter (1080i50: 5 − 6,5/9,33 = 4,3, gemessen 4 bis 5). Bei 1080p59.94 liegt die
+  Latenz mit 1,4 µs unter den übrigen (6,5 bis 7,2 µs): Der RTP-Zeitstempel zählt in 90-kHz-Ticks (11,1 µs), bei
+  59,94 Hz wechselt der Bildabstand zwischen 1501 und 1502 Ticks, die aus dem Zeitstempel berechnete Latenz
+  hat damit je Bild eine Rundung bis 11 µs. Latenzwerte sind also nur im Mittel über viele Bilder aussagekräftig.
+- **Zeitbasen von Sender und Empfänger um 214 Bilder verschoben (2026-11-23, Sender t1, 1080p50, Urteil „failed“, ohne
+  Ursache gefunden):** Der Strom selbst war gesund (IPT p50/p99 4,66 / 5,31 µs, 2452 Bilder, 0 Verluste, 0 beschädigt),
+  aber RTP-Offset −385133, FPT 15,77 ms, VRX −3214 / −3215 und Latenz −2 147 483,6 µs (die int32-Grenze von MTL). Das
+  rechnet sich: −385133 = 67 − 214 × 1800 Ticks, d. h. der Teilbildanteil (67 Ticks = 0,74 ms) stimmt, die RTP-Zeit
+  liegt aber genau 214 Bilder (4,28 s) vor der Ankunftszeit. FPT 15,77 ms ist der int32-Überlauf von −4,28 s (2³² ns −
+  4,279 s ≈ 15,7 ms) und VRX −3214 der Quotient aus 15 ms und TRS (4,666 µs): beides sind Folgen, keine Messwerte. Ein
+  gleichzeitig laufender zweiter Videosender (t3, 1080p100) im selben Prozess war einwandfrei. Der Monitor meldet diesen Fall
+  jetzt als Ereignis („RTP-Zeitstempel und Ankunftszeit weichen um mehr als 2 s ab“).
 - **Video-Timing des Testsenders am Empfänger (2026-11-23, 17:20, Oberfläche, 1920x1080p50, Pacing: Ratenbegrenzung):**
   Urteil von MTL **wide**, nicht narrow. IPT (n = 17,0 Mio.) p50 4,14 µs, p99 6,33 µs, max 16,9 µs bei TRS rund 4,7 µs
   (mehrere Gipfel, der Sender liegt im Mittel über der Rate und gleicht mit Pausen aus). Cinst p50 0,5, p99 8,8,

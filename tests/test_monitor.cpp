@@ -166,6 +166,39 @@ TEST_CASE("Flow: MTL-Bilder haben Vorrang vor der eigenen Analyse") {
     CHECK(found);
 }
 
+TEST_CASE("Flow: Latenz an der int32-Grenze meldet abweichende Zeitbasen") {
+    MonitorHub hub(HubConfig{});
+    std::string error;
+    auto video = hub.addFlow(videoFlow(true), error);
+    REQUIRE(video);
+    auto frame = [&](int32_t latencyNs, int32_t rtpOffset) {
+        VideoFrameReport report;
+        report.packetsTotal = 4115;
+        FrameTiming t;
+        t.compliance = Compliance::Failed;
+        t.latencyNs = latencyNs;
+        t.rtpOffset = rtpOffset;
+        report.timing[0] = t;
+        video->onVideoFrame(report);
+    };
+    auto count = [&](const std::string& part) {
+        int n = 0;
+        const auto snap = hub.snapshot("v1"); // nicht als Temporäres durchlaufen
+        for (const auto& e : snap["events"]) {
+            n += e["text"].get<std::string>().find(part) != std::string::npos ? 1 : 0;
+        }
+        return n;
+    };
+    frame(7200, 67); // gesund
+    CHECK(count("weichen um mehr als 2 s ab") == 0);
+    frame(INT32_MIN, -385133); // gemessen auf der Karte
+    frame(INT32_MIN, -385133); // nur der Wechsel wird gemeldet
+    CHECK(count("weichen um mehr als 2 s ab") == 1);
+    CHECK(count("-385133") == 1);
+    frame(7200, 67);
+    CHECK(count("stimmen wieder überein") == 1);
+}
+
 TEST_CASE("Flow: Zähler melden Verluste, Zurücksetzen leert") {
     MonitorHub hub(demoHub());
     std::string error;

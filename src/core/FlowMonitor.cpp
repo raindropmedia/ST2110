@@ -195,6 +195,28 @@ void FlowMonitor::recordVideoFrame(Path path, const FrameTiming& f) {
     p.rtpOffset.add(t, f.rtpOffset);
     p.iptMaxNs.add(t, f.iptMaxNs);
 
+    // MTL liefert Latenz und FPT als int32 in ns (±2,147 s). Steht die Latenz an dieser Grenze, liegen
+    // RTP-Zeitstempel und Ankunftszeit mehr als 2 s auseinander (Sender- und Empfängerzeit weichen ab, z. B.
+    // nach einem Zeitsprung der PTP-Uhr). FPT, VRX und RTP-Offset sind dann Überläufe und nicht auswertbar
+    // (gemessen: RTP-Offset −385133 = 67 − 214 Bilder, FPT 15,8 ms, VRX −3214 bei sonst gesundem Strom).
+    constexpr int64_t kLatencyLimitNs = 2147483000;
+    const bool mismatch = std::llabs(static_cast<int64_t>(f.latencyNs)) >= kLatencyLimitNs;
+    if (mismatch != p.timeMismatch) {
+        p.timeMismatch = mismatch;
+        const std::string name = std::string("Video ") + pathKey(path) + ": ";
+        if (mismatch) {
+            addEventLocked(
+                "error", name +
+                             "RTP-Zeitstempel und Ankunftszeit weichen um mehr als 2 s ab (Latenz an der "
+                             "Grenze von MTL, RTP-Offset " +
+                             std::to_string(f.rtpOffset) +
+                             " Ticks); FPT, VRX und RTP-Offset sind dann Überläufe. Zeitbasis von Sender und "
+                             "Empfänger prüfen (PTP-Zeitsprung, Sender neu starten)");
+        } else {
+            addEventLocked("info", name + "RTP-Zeitstempel und Ankunftszeit stimmen wieder überein");
+        }
+    }
+
     if (p.secondStart < 0) {
         p.secondStart = t;
     }

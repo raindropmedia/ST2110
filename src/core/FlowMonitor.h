@@ -107,6 +107,7 @@ class FlowMonitor {
         double secondStart = -1;
         std::optional<Compliance> lastSecondVerdict;
         std::optional<FrameTiming> lastFrame;
+        bool timeMismatch = false; // Zeitbasen von Sender und Empfänger weichen ab (Meldung nur beim Wechsel)
         TimeSeries cinstMax, vrxMin, vrxMax, fptUs, latencyUs, rtpOffset, iptMaxNs;
     };
     struct AudioPath {
