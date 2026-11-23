@@ -192,6 +192,24 @@ const Charts = (() => {
 
   /* Zeitverlauf: list = [{data: {t, min, max}, color, label, use: 'max'|'min'|'band'}].
    * opts: window (s), unit, markers [{y, label, color}], yMin, yMax, scale */
+  // Zusammenhängende Abschnitte einer Zeitreihe [von, bis). Eine Lücke (z. B. Sender gestoppt und neu gestartet,
+  // keine Bilder dazwischen) wird nicht überbrückt: Die Linie bricht ab, statt einen Verlauf vorzutäuschen.
+  function segments(t) {
+    const n = t.length;
+    if (n < 3) return [[0, n]];
+    const dts = [];
+    for (let i = 1; i < n; i++) dts.push(t[i] - t[i - 1]);
+    const sorted = dts.slice().sort((a, b) => a - b);
+    const limit = Math.max(sorted[Math.floor(sorted.length / 2)] * 4, 0.5);
+    const out = [];
+    let a = 0;
+    for (let i = 1; i < n; i++) {
+      if (dts[i - 1] > limit) { out.push([a, i]); a = i; }
+    }
+    out.push([a, n]);
+    return out;
+  }
+
   function series(canvas, list, opts = {}) {
     const items = list.filter(it => it.data && it.data.t && it.data.t.length);
     if (!items.length) { noData(canvas, opts.empty || 'noch keine Werte'); return; }
@@ -225,19 +243,25 @@ const Charts = (() => {
     for (const it of items) {
       const d = it.data;
       ctx.strokeStyle = it.color; ctx.fillStyle = it.color; ctx.lineWidth = 1.4;
+      const parts = segments(d.t);
       if (it.use === 'band') {
         ctx.globalAlpha = 0.25;
-        ctx.beginPath();
-        for (let i = 0; i < d.t.length; i++) ctx.lineTo(xs.map(d.t[i]), ys.map(d.max[i] * s));
-        for (let i = d.t.length - 1; i >= 0; i--) ctx.lineTo(xs.map(d.t[i]), ys.map(d.min[i] * s));
-        ctx.closePath(); ctx.fill();
+        for (const [a, b] of parts) {
+          ctx.beginPath();
+          for (let i = a; i < b; i++) ctx.lineTo(xs.map(d.t[i]), ys.map(d.max[i] * s));
+          for (let i = b - 1; i >= a; i--) ctx.lineTo(xs.map(d.t[i]), ys.map(d.min[i] * s));
+          ctx.closePath(); ctx.fill();
+        }
         ctx.globalAlpha = 1;
       }
       const field = it.use === 'min' ? d.min : d.max;
       ctx.beginPath();
-      for (let i = 0; i < d.t.length; i++) {
-        const x = xs.map(d.t[i]), y = ys.map(field[i] * s);
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      for (const [a, b] of parts) {
+        for (let i = a; i < b; i++) {
+          const x = xs.map(d.t[i]), y = ys.map(field[i] * s);
+          if (i === a) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        if (b - a === 1) { const x = xs.map(d.t[a]), y = ys.map(field[a] * s); ctx.moveTo(x, y); ctx.lineTo(x + 1, y); }
       }
       ctx.stroke();
     }
