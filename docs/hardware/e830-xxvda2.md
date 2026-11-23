@@ -90,6 +90,10 @@ Ohne Sender lässt sich die Kette mit dem Beispielprogramm von MTL auf Port 1 pr
   `setup-host.sh ddp`), PTP initialisiert. Nach einem warmen Neustart war die Karte am Chipsatz-Steckplatz einmal
   nicht erreichbar (`D3cold to D0`, danach scheinbar „Firmware recovery mode“); ein Kaltstart (Netzstecker) half.
   Der Steckplatz (Root-Port `00:1c.4`, PCIe 2.0 x4) trainiert nur x2.
+- [ ] Firmware antwortet nach dem Start nicht mehr (2026-11-23, Chipsatz-Steckplatz, VT-d an): `ethtool` und
+  `devlink dev info` mit `Input/output error` („Unable to discover device capabilities“). Mit `irdma` brach die
+  Admin Queue nach rund 15 s ab, ohne `irdma` schon beim Start (Flow Director, DCB, `Failed to get link info`,
+  Port 1 scheinbar im Recovery-Modus). Keine DMAR- oder AER-Meldungen. Nächster Test: CPU-Steckplatz.
 - [ ] `irdma` (RDMA) läuft beim Start 15 s je Port in eine Zeitüberschreitung; wird nicht gebraucht und kann
   per `blacklist irdma` abgeschaltet werden
 - [ ] E830-L: TSN-Pacing beim Senden und `PTP_SYS_OFFSET_PRECISE` auf der Karte prüfen (MTL testet `12de` nicht)
