@@ -2,6 +2,7 @@
 
 #include "core/FlowController.h"
 #include "core/MonitorHub.h"
+#include "core/TestSender.h"
 
 #include <functional>
 #include <memory>
@@ -29,6 +30,15 @@ namespace st2110 {
 //                                        ersten Bild. Ein Abruf hält die Vorschau 3 s lang aktiv.
 //   GET    /api/preview/audio?flow=a1&from=n&pair=0  Ton ab Abtastwert n (16 Bit stereo LE, Kopfzeilen
 //                                        X-Audio-Start/-Frames/-Rate/-Channels/-Peaks)
+//   GET    /api/tx                       Testsender: Sendeport, Höchstzahl, Einträge mit Zustand
+//                                        (stopped, starting, sending, stopping, error); {"available": false},
+//                                        wenn kein Sendeport konfiguriert ist (--tx-port)
+//   POST   /api/tx                       Testsender anlegen: {"kind": "video"|"audio", "spec": "ip:port,…",
+//                                        "start": true|false}; spec wie bei --tx-video bzw. --tx-audio
+//   PUT    /api/tx/<id>                  Einstellungen ändern ({"spec": "…"}), nur im Zustand stopped/error
+//   POST   /api/tx/<id>/start            senden (der Start läuft im Hintergrund: MTL wartet auf PTP)
+//   POST   /api/tx/<id>/stop             Senden beenden
+//   DELETE /api/tx/<id>                  Testsender löschen
 //   POST   /api/reset                    Messwerte zurücksetzen
 //   GET    /api/demo                     Störungen der Demo (nur mit --demo)
 //   POST   /api/demo                     {"preset": "burst"}
@@ -41,8 +51,9 @@ class WebServer {
         std::function<bool(const std::string&)> set;
     };
 
-    WebServer(MonitorHub& hub, FlowController* controller, nlohmann::json info, std::string webuiDir,
-              std::optional<DemoControl> demo);
+    // testSender darf nullptr sein (kein Sendeport).
+    WebServer(MonitorHub& hub, FlowController* controller, TestSender* testSender, nlohmann::json info,
+              std::string webuiDir, std::optional<DemoControl> demo);
     ~WebServer();
     WebServer(const WebServer&) = delete;
     WebServer& operator=(const WebServer&) = delete;
@@ -54,6 +65,7 @@ class WebServer {
   private:
     MonitorHub& hub_;
     FlowController* controller_;
+    TestSender* testSender_;
     nlohmann::json info_;
     std::string webuiDir_;
     std::optional<DemoControl> demo_;

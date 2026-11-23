@@ -21,6 +21,8 @@
     lastEventCount: 0,
     seenEvents: 0,
     info: null,
+    tx: null,        // letzte Antwort von /api/tx
+    txEditing: null, // ID des Eintrags, dessen Einstellungen gerade im Formular stehen
   };
 
   const charts = {};
@@ -74,6 +76,7 @@
     document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.dataset.view === tab));
     if (tab === 'events') { state.seenEvents = state.lastEventCount; $('eventBadge').textContent = ''; }
     if (tab === 'flows') pollFlows();
+    if (tab === 'txgen') pollTx();
     if (tab !== 'preview') leavePreview();
     writeHash();
     render();
@@ -182,6 +185,7 @@
     pollFlows();
     setInterval(poll, 500);
     setInterval(() => { if (state.tab === 'flows' && !state.paused) pollFlows(); }, 1000);
+    setInterval(() => { if (state.tab === 'txgen') pollTx(); }, 1000);
   }
 
   function updateRates(snap) {
@@ -215,6 +219,7 @@
     updateTabs(s);
     switch (state.tab) {
       case 'flows': renderFlows(); break;
+      case 'txgen': renderTx(); break;
       case 'overview': renderOverview(s); break;
       case 'preview': renderPreviewCards(s); break;
       case 'video': renderVideo(s); break;
@@ -696,7 +701,7 @@
   function updateTabs(s) {
     const kind = s.flow ? s.flow.kind : null;
     const allowed = {
-      flows: true, ptp: true, events: true,
+      flows: true, txgen: true, ptp: true, events: true,
       overview: !!kind, counters: !!kind, redundancy: !!kind, preview: !!kind,
       video: kind === 'video', profile: kind === 'video', audio: kind === 'audio',
     };
@@ -777,6 +782,247 @@
           <td><button class="btn small" data-action="sap" data-key="${esc(e.key)}" ${all || !e.media.length ? 'disabled' : ''}>Überwachen</button></td></tr>`;
       }).join('') : '<tr><td colspan="5" class="empty">keine Ankündigungen</td></tr>');
   }
+
+  // ---------- Testsender ----------
+  const txStateLabel = { stopped: 'gestoppt', starting: 'startet …', sending: 'sendet', stopping: 'stoppt …', error: 'Fehler' };
+  const ptimePerSecond = { '125us': 8000, '250us': 4000, '333us': 3000, '1ms': 1000, '4ms': 250 };
+
+  async function pollTx() {
+    try {
+      const res = await fetch('api/tx', { cache: 'no-store' });
+      if (!res.ok) return;
+      state.tx = await res.json();
+      if (state.tab === 'txgen') renderTx();
+    } catch (_) { /* Abfrage des Snapshots meldet Verbindungsfehler */ }
+  }
+
+  // Beschreibung wie bei --tx-video / --tx-audio
+  function txSpec(f) {
+    const spec = [`${f.ip}:${f.udpPort}`];
+    if (f.kind === 'video') {
+      spec.push(`format=${f.video.width}x${f.video.height}${f.video.interlaced ? 'i' : 'p'}${f.video.rate}`);
+    } else {
+      spec.push(`format=L${f.audio.bitDepth}/${f.audio.sampleRate}/${f.audio.channels}`, `ptime=${f.audio.ptime}`);
+    }
+    spec.push(`pt=${f.payloadType}`);
+    if (f.label) spec.push('name=' + f.label.replace(/,/g, ' '));
+    return spec.join(',');
+  }
+
+  // Nutzdatenrate in Gbit/s (4:2:2, 10 Bit = 20 Bit je Bildpunkt; bei Zeilensprung halbe Höhe je Halbbild)
+  function txVideoGbit(width, height, rate, interlaced) {
+    return width * (interlaced ? height / 2 : height) * 20 * rate / 1e9;
+  }
+
+  function txFormValues() {
+    const f = $('txForm').elements;
+    const kind = f.kind.value;
+    const out = { kind, address: f.address.value.trim(), pt: f.pt.value, name: f.name.value.trim().replace(/,/g, ' ') };
+    if (kind === 'video') {
+      out.resolution = f.resolution.value.trim();
+      out.rate = f.rate.value;
+      out.interlaced = f.interlaced.checked;
+    } else {
+      out.sampleRate = +f.sampleRate.value;
+      out.bitDepth = +f.bitDepth.value;
+      out.channels = +f.channels.value;
+      out.ptime = f.ptime.value;
+    }
+    return out;
+  }
+
+  function txFormSpec() {
+    const v = txFormValues();
+    const spec = [v.address];
+    if (v.kind === 'video') spec.push(`format=${v.resolution}${v.interlaced ? 'i' : 'p'}${v.rate}`);
+    else spec.push(`format=L${v.bitDepth}/${v.sampleRate}/${v.channels}`, `ptime=${v.ptime}`);
+    if (v.pt !== '') spec.push('pt=' + v.pt);
+    if (v.name) spec.push('name=' + v.name);
+    return { kind: v.kind, spec: spec.join(',') };
+  }
+
+  function updateTxForm() {
+    const form = $('txForm');
+    const kind = form.elements.kind.value;
+    form.querySelectorAll('[data-kind]').forEach(el => { el.hidden = el.dataset.kind !== kind; });
+    // Hinweis zur Last bzw. Paketgröße
+    const v = txFormValues();
+    const est = $('txEstimate');
+    est.className = 'hint';
+    if (kind === 'video') {
+      const m = /^(\d+)x(\d+)$/.exec(v.resolution);
+      if (!m) { est.textContent = 'Auflösung als Breite x Höhe, z. B. 1920x1080.'; return; }
+      const gbit = txVideoGbit(+m[1], +m[2], parseFloat(v.rate), v.interlaced);
+      est.textContent = `Nutzdaten ca. ${fmt(gbit, 2)} Gbit/s (auf der Leitung rund 5 % mehr).`;
+      if (gbit * 1.05 > 9.5) { est.className = 'hint warn'; est.textContent += ' Mehr, als ein 10G-Link trägt.'; }
+    } else {
+      const perSecond = ptimePerSecond[v.ptime];
+      const samples = Math.round(v.sampleRate / perSecond);
+      const bytes = samples * v.channels * (v.bitDepth / 8);
+      const maxChannels = Math.min(64, Math.floor(1440 / (samples * (v.bitDepth / 8))));
+      est.textContent = `${samples} Abtastwerte je Kanal und Paket, Nutzlast ${bytes} Byte (höchstens 1440); mit dieser Paketzeit höchstens ${maxChannels} Kanäle.`;
+      if (bytes > 1440) est.className = 'hint warn';
+    }
+  }
+
+  // Standardziel für einen neuen Eintrag: erste freie Adresse in 239.211.0.x (Video) bzw. 239.211.1.x (Ton)
+  function nextTxAddress(kind) {
+    const used = new Set(((state.tx && state.tx.flows) || []).map(f => `${f.ip}:${f.udpPort}`));
+    for (let i = 1; i < 250; ++i) {
+      const a = kind === 'video' ? `239.211.0.${i}:20000` : `239.211.1.${i}:30000`;
+      if (!used.has(a)) return a;
+    }
+    return '';
+  }
+
+  function txMessage(text, error) {
+    const msg = $('txMsg');
+    msg.hidden = !text;
+    msg.className = 'msg' + (error ? ' error' : '');
+    msg.textContent = text || '';
+  }
+
+  function txResetForm() {
+    state.txEditing = null;
+    const f = $('txForm').elements;
+    f.kind.disabled = false;
+    f.address.value = nextTxAddress(f.kind.value);
+    f.name.value = '';
+    f.pt.value = f.kind.value === 'video' ? 96 : 97;
+    $('txFormTitle').textContent = 'Testsender anlegen';
+    $('txSubmit').textContent = 'Anlegen und senden';
+    $('txSave').hidden = false;
+    $('txCancel').hidden = true;
+    updateTxForm();
+  }
+
+  function txEdit(id) {
+    const f = ((state.tx && state.tx.flows) || []).find(x => x.id === id);
+    if (!f) return;
+    state.txEditing = id;
+    const e = $('txForm').elements;
+    e.kind.value = f.kind;
+    e.kind.disabled = true;
+    e.address.value = `${f.ip}:${f.udpPort}`;
+    e.name.value = f.label;
+    e.pt.value = f.payloadType;
+    if (f.kind === 'video') {
+      e.resolution.value = `${f.video.width}x${f.video.height}`;
+      e.rate.value = f.video.rate;
+      e.interlaced.checked = f.video.interlaced;
+    } else {
+      e.sampleRate.value = f.audio.sampleRate;
+      e.bitDepth.value = f.audio.bitDepth;
+      e.channels.value = f.audio.channels;
+      e.ptime.value = f.audio.ptime;
+    }
+    $('txFormTitle').textContent = `Einstellungen von ${f.label} ändern`;
+    $('txSubmit').textContent = 'Übernehmen';
+    $('txSave').hidden = true;
+    $('txCancel').hidden = false;
+    updateTxForm();
+    txMessage('');
+    $('txFormCard').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  async function txRequest(method, path, body) {
+    try {
+      const res = await fetch(path, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+      const r = await res.json();
+      if (r.flows) { state.tx = r; renderTx(); }
+      if (!res.ok || r.ok === false) { txMessage(r.error || `Fehler ${res.status}`, true); return null; }
+      return r;
+    } catch (err) {
+      txMessage('Fehler: ' + err.message, true);
+      return null;
+    }
+  }
+
+  function renderTx() {
+    const d = state.tx;
+    if (!d) return;
+    $('txUnavailable').hidden = d.available !== false ? true : false;
+    $('txFormCard').hidden = d.available === false;
+    if (d.available === false) { $('txTable').innerHTML = ''; $('txInfo').textContent = ''; return; }
+    $('txInfo').textContent = `Port ${d.port}${d.localIp ? ' · ' + d.localIp : ''} · ${d.flows.length} von höchstens ${d.maxFlows}`;
+    $('txTable').innerHTML = `<tr><th>Zustand</th><th>Name</th><th>Art</th><th>Format</th><th>Ziel</th><th>PT</th><th>Nutzdaten</th><th></th></tr>` +
+      (d.flows.length ? d.flows.map(f => {
+        const busy = f.state === 'starting' || f.state === 'stopping';
+        const running = f.state === 'sending' || f.state === 'starting';
+        const rate = f.kind === 'video'
+          ? fmt(txVideoGbit(f.video.width, f.video.height, parseFloat(f.video.rate), f.video.interlaced) * 1000, 0) + ' Mbit/s'
+          : fmt(f.audio.sampleRate * f.audio.channels * f.audio.bitDepth / 1e6, 2) + ' Mbit/s';
+        return `<tr><td><span class="txstate ${f.state}">${txStateLabel[f.state] || f.state}</span>${f.state === 'starting' ? '<span class="sub">wartet ggf. auf PTP</span>' : ''}</td>
+          <td>${esc(f.label)}</td><td><span class="tag ${f.kind}">${kindLabel[f.kind]}</span></td><td class="mono">${esc(f.format)}</td>
+          <td class="mono">${esc(f.ip)}:${f.udpPort}</td><td class="num">${f.payloadType}</td><td class="num">${rate}</td>
+          <td class="actions">
+            ${running ? `<button class="btn small" data-tx="stop" data-id="${esc(f.id)}" ${f.state === 'stopping' ? 'disabled' : ''}>Stoppen</button>`
+                      : `<button class="btn small primary" data-tx="start" data-id="${esc(f.id)}" ${busy ? 'disabled' : ''}>Starten</button>`}
+            <button class="btn small" data-tx="edit" data-id="${esc(f.id)}" ${f.state === 'stopped' || f.state === 'error' ? '' : 'disabled title="Nur im gestoppten Zustand"'}>Ändern</button>
+            <button class="btn small" data-tx="monitor" data-id="${esc(f.id)}" title="Den Strom über den Empfangsport überwachen">Überwachen</button>
+            <button class="btn small danger" data-tx="remove" data-id="${esc(f.id)}" ${busy ? 'disabled' : ''}>Löschen</button></td></tr>
+          ${f.message ? `<tr><td></td><td colspan="7" class="wrap">${esc(f.message)}</td></tr>` : ''}`;
+      }).join('') : '<tr><td colspan="8" class="empty">Noch kein Testsender – unten einen anlegen.</td></tr>');
+    if (state.txEditing === null && !$('txForm').elements.address.dataset.touched) {
+      $('txForm').elements.address.value = nextTxAddress($('txForm').elements.kind.value);
+    }
+  }
+
+  $('txTable').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-tx]');
+    if (!btn || btn.disabled) return;
+    const id = btn.dataset.id;
+    txMessage('');
+    switch (btn.dataset.tx) {
+      case 'start': await txRequest('POST', `api/tx/${id}/start`); break;
+      case 'stop': await txRequest('POST', `api/tx/${id}/stop`); break;
+      case 'remove':
+        if (state.txEditing === id) txResetForm();
+        await txRequest('DELETE', `api/tx/${id}`);
+        break;
+      case 'edit': txEdit(id); break;
+      case 'monitor': {
+        const f = (state.tx.flows || []).find(x => x.id === id);
+        if (!f) break;
+        $('addFlowMsg').hidden = true;
+        if (await postFlow({ kind: f.kind, spec: txSpec(f) })) showTab('overview');
+        else txMessage(($('addFlowMsg').textContent || 'Flow lässt sich nicht überwachen.'), true);
+        break;
+      }
+    }
+  });
+
+  async function txSubmit(start) {
+    const body = txFormSpec();
+    let r;
+    if (state.txEditing) {
+      r = await txRequest('PUT', `api/tx/${state.txEditing}`, { spec: body.spec });
+      if (r) { txMessage('Einstellungen übernommen.'); txResetForm(); }
+    } else {
+      r = await txRequest('POST', 'api/tx', { ...body, start });
+      if (r) {
+        txMessage(start ? `${r.id} wird gestartet.` : `${r.id} angelegt.`);
+        const address = $('txForm').elements.address;
+        delete address.dataset.touched;
+        txResetForm();
+      }
+    }
+  }
+  $('txForm').addEventListener('submit', (e) => { e.preventDefault(); txSubmit(true); });
+  $('txSave').addEventListener('click', () => txSubmit(false));
+  $('txCancel').addEventListener('click', () => { txResetForm(); txMessage(''); });
+  $('txForm').addEventListener('input', (e) => {
+    if (e.target.name === 'address') e.target.dataset.touched = '1';
+    updateTxForm();
+  });
+  $('txForm').elements.kind.addEventListener('change', (e) => {
+    const f = $('txForm').elements;
+    delete f.address.dataset.touched;
+    f.address.value = nextTxAddress(e.target.value);
+    f.pt.value = e.target.value === 'video' ? 96 : 97;
+    updateTxForm();
+  });
+  updateTxForm();
 
   async function postFlow(body) {
     const msg = $('addFlowMsg');

@@ -1,3 +1,4 @@
+#include "core/NetworkInfo.h"
 #include "core/Options.h"
 
 #include <algorithm>
@@ -276,8 +277,11 @@ TEST_CASE("Testsender: Fehler werden gemeldet") {
         return parseOptions(args, fakeRead);
     };
     CHECK(contains(withTx({"--tx-video", "239.1.1.1:20000"}).errors, "ohne Sendeport"));
-    CHECK(contains(withTx({"--tx-port", "0000:af:00.1", "--tx-local-ip", "192.168.10.11"}).errors,
-                   "ohne Testsender-Flow"));
+    CHECK(contains(withTx({"--max-tx-flows", "0"}).errors, "--max-tx-flows"));
+    CHECK(contains(withTx({"--max-tx-flows", "1", "--tx-port", "0000:af:00.1", "--tx-local-ip",
+                           "192.168.10.11", "--tx-video", "239.1.1.1:20000", "--tx-audio", "239.1.1.2:30000"})
+                       .errors,
+                   "Mehr Testsender"));
     CHECK(contains(withTx({"--tx-port", "0000:af:00.0", "--tx-local-ip", "192.168.10.11", "--tx-video",
                            "239.1.1.1:20000"})
                        .errors,
@@ -295,4 +299,35 @@ TEST_CASE("Testsender allein, ohne Empfangsflow") {
                      fakeRead);
     CHECK(r.errors.empty());
     CHECK(r.options.has_value());
+}
+
+TEST_CASE("Verwaltungsport: Standardroute aus /proc/net/route") {
+    const std::string table =
+        "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n"
+        "docker0\t000011AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0\n"
+        "wlan0\t00000000\t0100A8C0\t0003\t0\t0\t600\t00000000\t0\t0\t0\n"
+        "enp7s0\t00000000\t01D3A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0\n"
+        "enp7s0\t00D3A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\t0\t0\t0\n";
+    CHECK(parseDefaultRouteInterface(table) == "enp7s0"); // kleinste Metrik
+    // Ohne Standardroute (isoliertes Testnetz) oder nur eine abgeschaltete: leer
+    CHECK(parseDefaultRouteInterface("Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\n"
+                                     "enp7s0\t00D3A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\n")
+              .empty());
+    CHECK(parseDefaultRouteInterface("enp7s0\t00000000\t01D3A8C0\t0002\t0\t0\t100\t00000000\n").empty());
+    CHECK(parseDefaultRouteInterface("").empty());
+}
+
+TEST_CASE("Start nur mit Port: Flows und Testsender kommen aus der Oberfläche") {
+    auto r = parseOptions({"x", "--port", "0000:af:00.0", "--local-ip", "10.0.0.1", "--tx-port",
+                           "0000:af:00.1", "--tx-local-ip", "10.0.0.2", "--max-tx-flows", "6"},
+                          fakeRead);
+    REQUIRE(r.options);
+    CHECK(r.options->flows.empty());
+    CHECK(r.options->txFlows.empty());
+    CHECK(r.options->maxTxFlows == 6);
+    CHECK(r.options->autoDiscover);
+    auto off =
+        parseOptions({"x", "--port", "0000:af:00.0", "--local-ip", "10.0.0.1", "--no-discover"}, fakeRead);
+    REQUIRE(off.options);
+    CHECK_FALSE(off.options->autoDiscover);
 }

@@ -83,12 +83,18 @@ struct Options {
 
     // Testsender (nur mit MTL): sendet Testbild bzw. Testton über einen eigenen Port derselben
     // MTL-Instanz; Zeitbezug wie beim Empfang (PTP über MTL). Ohne ST 2022-7.
+    // Weitere Testsender lassen sich zur Laufzeit in der Oberfläche anlegen (höchstens maxTxFlows; MTL
+    // reserviert dafür beim Start Sende-Queues).
     std::optional<PortOptions> txPort;
     std::vector<FlowConfig> txFlows;
+    unsigned maxTxFlows = 4;
 
     // Flow-Erkennung: Kernel-Schnittstelle, deren Pakete mitgelesen werden (leer = aus), und
     // SAP-Ankündigungen auf derselben Schnittstelle.
+    // Ohne Angabe liest das Programm im DPDK-Betrieb auf dem Verwaltungsport mit (Schnittstelle mit der
+    // Standardroute); autoDiscover = false (--no-discover) schaltet das ab.
     std::string discoverInterface;
+    bool autoDiscover = true;
     bool sap = true;
 
     // Hardware-Zeitstempel der Karte für jedes empfangene Paket (MTL_FLAG_ENABLE_HW_TIMESTAMP).

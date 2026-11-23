@@ -152,7 +152,17 @@ table.flows .dot.failed, table.flows .dot.error { background: var(--failed); }
 .sdp-box { margin-top: 12px; }
 .sdp-box summary { cursor: pointer; color: var(--muted); }
 .sdp-box textarea { width: 100%; margin: 8px 0; resize: vertical; }
-.msg { margin-top: 10px; padding: 7px 10px; border-radius: 6px; background: #0f2a1a; color: #86efac; white-space: pre-line; }
+.form-grid label.check { flex-direction: row; align-items: center; gap: 8px; }
+.form-grid label.check input { width: auto; }
+.form-actions { gap: 8px; flex-wrap: wrap; }
+.txstate { font-weight: 600; }
+.txstate.sending { color: var(--narrow); }
+.txstate.starting, .txstate.stopping { color: var(--wide); }
+.txstate.error { color: var(--failed); }
+.txstate.stopped { color: var(--muted); }
+table.flows td.wrap { white-space: normal; max-width: 360px; color: #fecaca; }
+.hint.warn { color: var(--wide); }
+.msg {  margin-top: 10px; padding: 7px 10px; border-radius: 6px; background: #0f2a1a; color: #86efac; white-space: pre-line; }
 .msg.error { background: #2a0f0f; color: #fecaca; }
 .tabs button:disabled { opacity: .35; cursor: not-allowed; }
 .tabs button:disabled:hover { background: transparent; color: var(--muted); }

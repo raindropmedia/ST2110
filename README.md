@@ -91,12 +91,19 @@ und `--audio ip:port[,red=…][,format=L24/48000/2][,ptime=1][,pt=97][,source=�
 (höchstens `--max-flows`, Vorgabe 8). 1080i50 ist `format=1920x1080i50` (Halbbilder je Sekunde).
 `--help` zeigt alle Optionen.
 
-**Testsender:** `--tx-port`, `--tx-local-ip`, `--tx-video`, `--tx-audio` senden über einen weiteren Port
-derselben Karte Testbild (Farbbalken, laufendes Quadrat, Blitz zu jeder vollen Sekunde) und Testton
-(1 kHz links mit EBU-Kennung, 2 kHz rechts, −18 dBFS). Sender und Empfang laufen in derselben MTL-Instanz
-und nutzen dieselbe PTP-Zeit; der Sender ist ein „narrow“-Sender nach ST 2110-21. Beide Ports müssen am
-selben Netz (Switch mit PTP und IGMP) hängen; eine direkte Kabelverbindung zwischen den Ports reicht
-nicht, weil dann am Empfangsport kein PTP-Grandmaster ankommt. Beispiel:
+**Testsender:** Über einen zweiten Port derselben Karte sendet das Programm Testbild (Farbbalken, Grautreppe,
+laufendes Quadrat, Blitz zu jeder vollen Sekunde) und Testton (1 kHz links mit EBU-Kennung, 2 kHz rechts, weitere
+Kanäle je 500 Hz · Kanalnummer, −18 dBFS). Sender und Empfang laufen in derselben MTL-Instanz und nutzen
+dieselbe PTP-Zeit ([ADR 0007](docs/adr/0007-testsender-und-erkennung-am-verwaltungsport.md)). Beide Ports müssen
+am selben Netz (Switch mit PTP und IGMP) hängen; ein Kabel direkt zwischen den Ports reicht nicht, weil dann am
+Empfangsport kein PTP-Grandmaster ankommt.
+
+Nur der Sendeport wird beim Start angegeben (`--tx-port`, `--tx-local-ip`; `--max-tx-flows` reserviert Queues,
+Vorgabe 4). Alles Weitere stellt man im Tab **Testsender** der Oberfläche ein: Video (Auflösung, Bildrate,
+Zeilensprung), Ton (Abtastrate 48/96 kHz, 16/24 Bit, 1–64 Kanäle, Paketzeit 125 µs bis 4 ms), Ziel und
+Payload-Typ; Anlegen, Starten, Stoppen, Ändern, Löschen. Der Start wartet bei MTL bis zu 3 min auf PTP und läuft
+im Hintergrund. Über „Überwachen“ lässt sich der gesendete Strom gleich am Empfangsport messen. Wer will, gibt
+Sender schon beim Start vor:
 
 ```bash
 sudo st2110-monitor --port 0000:01:00.0 --local-ip 192.168.211.100 \
@@ -106,8 +113,10 @@ sudo st2110-monitor --port 0000:01:00.0 --local-ip 192.168.211.100 \
      --audio 239.211.0.2:30000,format=L24/48000/2,name=Testton --http 0.0.0.0:8090
 ```
 
-**Erkennung:** `--discover <schnittstelle>` liest auf einer **Kernel**-Schnittstelle alle UDP/RTP-Flows mit
-und empfängt SAP. Die Karte im DPDK-Betrieb sieht nur abonnierte Flows; für die Erkennung deshalb eine
+**Erkennung:** Im DPDK-Betrieb liest das Programm von selbst auf dem **Verwaltungsport** (Schnittstelle mit der
+Standardroute) alle UDP/RTP-Flows mit und empfängt SAP; `--no-discover` schaltet das ab. Mit IGMP-Snooping im
+Switch sieht der Verwaltungsport nur SAP und selbst abonnierte Gruppen, für eine vollständige Sicht braucht es
+einen Spiegelport. `--discover <schnittstelle>` wählt eine andere **Kernel**-Schnittstelle. Die Karte im DPDK-Betrieb sieht nur abonnierte Flows; für die Erkennung deshalb eine
 eigene Schnittstelle an einem Spiegelport (oder ohne IGMP-Snooping) vorsehen
 ([ADR 0005](docs/adr/0005-mehrere-flows-und-erkennung.md)). Braucht CAP_NET_RAW. Ohne `--port` läuft das
 Programm als **reiner Netz-Scanner**, auch ohne MTL: `sudo st2110-monitor --discover eno1`.
@@ -140,6 +149,11 @@ Programm als **reiner Netz-Scanner**, auch ohne MTL: `sudo st2110-monitor --disc
 | `GET /api/preview/video?flow=v1&width=960&fps=25&quality=80&after=n` | Vorschaubild als JPEG; wartet bis 250 ms auf ein Bild neuer als n (Größe in `X-Preview-Width`/`-Height`, 204 bis zum ersten Bild) |
 | `GET /api/preview/audio?flow=a1&from=n&pair=0` | Ton ab Abtastwert n, Kanalpaar als 16 Bit stereo, Pegel aller Kanäle in `X-Audio-Peaks` |
 | `GET /api/snapshot?flow=v1&window=60` | Werte, Histogramme, Verläufe und Profile eines Flows, PTP, Ereignisse, Flow-Liste |
+| `GET /api/tx` | Testsender: Sendeport, Höchstzahl, Einträge mit Zustand (`stopped`, `starting`, `sending`, `stopping`, `error`); `{"available": false}` ohne `--tx-port` |
+| `POST /api/tx` | Testsender anlegen: `{"kind":"audio","spec":"239.211.1.1:30000,format=L24/48000/8,ptime=125us","start":true}` (spec wie `--tx-video`/`--tx-audio`) |
+| `PUT /api/tx/<id>` | Einstellungen ändern (`{"spec":"…"}`), nur im Zustand `stopped` oder `error` |
+| `POST /api/tx/<id>/start`, `POST /api/tx/<id>/stop` | Senden starten (im Hintergrund, MTL wartet auf PTP) bzw. beenden |
+| `DELETE /api/tx/<id>` | Testsender löschen |
 | `POST /api/reset` | Messwerte zurücksetzen |
 | `GET/POST /api/demo` | Störung der Demo abfragen bzw. setzen (`{"preset": "burst"}`) |
 

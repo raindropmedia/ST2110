@@ -1,8 +1,10 @@
 // st2110-monitor: Messgerät für SMPTE ST 2110 auf Basis von MTL (siehe README.md).
 
 #include "core/MonitorHub.h"
+#include "core/NetworkInfo.h"
 #include "core/Options.h"
 #include "demo/DemoSource.h"
+#include "demo/DemoTxBackend.h"
 #include "discovery/Discovery.h"
 #include "web/WebServer.h"
 
@@ -100,12 +102,27 @@ int main(int argc, char** argv) {
 
     installSignalHandlers();
 
+    // Erkennung: Ohne --discover liest das Programm im DPDK-Betrieb auf dem Verwaltungsport mit
+    // (Schnittstelle mit der Standardroute). Die Karte selbst sieht nur abonnierte Flows.
+    std::string discoverInterface = options.discoverInterface;
+    if (discoverInterface.empty() && options.autoDiscover && !options.demo && !scannerOnly) {
+        discoverInterface = defaultRouteInterface();
+        if (discoverInterface.empty()) {
+            std::cerr
+                << "Hinweis: Keine Standardroute gefunden, Erkennung aus (mit --discover <schnittstelle> "
+                   "einschalten).\n";
+        } else {
+            std::cerr << "Erkennung auf dem Verwaltungsport " << discoverInterface
+                      << " (automatisch; --no-discover schaltet sie ab).\n";
+        }
+    }
+
     HubConfig config;
     config.hwTimestamp = options.hwTimestamp;
     config.ptp = options.ptp;
     config.demo = options.demo;
     config.maxFlows = options.maxFlows;
-    config.discoverInterface = options.discoverInterface;
+    config.discoverInterface = discoverInterface;
     MonitorHub hub(config);
 
     std::unique_ptr<DemoSource> demo;
@@ -113,9 +130,16 @@ int main(int argc, char** argv) {
 #ifdef ST2110_WITH_MTL
     std::unique_ptr<MtlSource> mtl;
 #endif
+    // Testsender: bei MTL gehört die Verwaltung der Quelle, in der Demo gibt es eine ohne Senden.
+    TestSender* testSender = nullptr;
+    std::unique_ptr<DemoTxBackend> demoTxBackend;
+    std::unique_ptr<TestSender> demoTestSender;
     if (options.demo) {
         demo = std::make_unique<DemoSource>(options, hub);
         controller = demo.get();
+        demoTxBackend = std::make_unique<DemoTxBackend>(hub);
+        demoTestSender = std::make_unique<TestSender>(*demoTxBackend, options.maxTxFlows, "demo", "");
+        testSender = demoTestSender.get();
     } else if (!scannerOnly) {
 #ifdef ST2110_WITH_MTL
         std::string error;
@@ -125,12 +149,13 @@ int main(int argc, char** argv) {
             return 2;
         }
         controller = mtl.get();
+        testSender = mtl->testSender();
 #endif
     }
 
     std::unique_ptr<Discovery> discovery;
-    if (!options.discoverInterface.empty()) {
-        discovery = std::make_unique<Discovery>(hub, options.discoverInterface, options.sap);
+    if (!discoverInterface.empty()) {
+        discovery = std::make_unique<Discovery>(hub, discoverInterface, options.sap);
         std::string error;
         if (!discovery->start(error)) {
             std::cerr << "Hinweis: Erkennung nicht verfügbar: " << error << '\n';
@@ -159,8 +184,9 @@ int main(int argc, char** argv) {
                             {"packetHook", options.demo || hasPacketHook()},
                             {"hwTimestamp", options.hwTimestamp},
                             {"ptp", options.ptp}};
-        web = std::make_unique<WebServer>(
-            hub, controller, info, options.webuiDir.empty() ? ST2110_WEBUI_DIR : options.webuiDir, control);
+        web = std::make_unique<WebServer>(hub, controller, testSender, info,
+                                          options.webuiDir.empty() ? ST2110_WEBUI_DIR : options.webuiDir,
+                                          control);
         std::string host;
         uint16_t port = 0;
         parseListen(options.httpListen, host, port);
@@ -192,6 +218,8 @@ int main(int argc, char** argv) {
 
     web.reset();
     discovery.reset();
+    demoTestSender.reset();
+    demoTxBackend.reset();
     demo.reset();
 #ifdef ST2110_WITH_MTL
     mtl.reset();

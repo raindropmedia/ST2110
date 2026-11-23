@@ -8,6 +8,10 @@
 #include <string>
 
 namespace st2110 {
+class TestSender;
+}
+
+namespace st2110 {
 
 // Empfang über MTL: eine MTL-Instanz mit Port P (und R) und je Flow eine Sitzung (st20 Bildebene bzw.
 // st30), beide mit Timing-Parser. Flows lassen sich zur Laufzeit hinzufügen und entfernen; MTL
@@ -26,6 +30,9 @@ class MtlSource : public FlowController {
 
     std::string addFlow(const FlowConfig& flow, std::string& error) override;
     bool removeFlow(const std::string& id, std::string& error) override;
+
+    // Verwaltung der Testsender (nur mit --tx-port, sonst nullptr); gehört der Quelle.
+    TestSender* testSender();
 
     // true, wenn MTL mit dem Paket-Rückruf gebaut ist (Histogramme und Paketprofile verfügbar).
     static bool hasPacketHook();

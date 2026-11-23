@@ -19,10 +19,10 @@ void sendJson(httplib::Response& res, const json& body, int status = 200) {
 
 } // namespace
 
-WebServer::WebServer(MonitorHub& hub, FlowController* controller, json info, std::string webuiDir,
-                     std::optional<DemoControl> demo)
-    : hub_(hub), controller_(controller), info_(std::move(info)), webuiDir_(std::move(webuiDir)),
-      demo_(std::move(demo)), server_(std::make_unique<httplib::Server>()) {}
+WebServer::WebServer(MonitorHub& hub, FlowController* controller, TestSender* testSender, json info,
+                     std::string webuiDir, std::optional<DemoControl> demo)
+    : hub_(hub), controller_(controller), testSender_(testSender), info_(std::move(info)),
+      webuiDir_(std::move(webuiDir)), demo_(std::move(demo)), server_(std::make_unique<httplib::Server>()) {}
 
 WebServer::~WebServer() {
     stop();
@@ -216,6 +216,119 @@ bool WebServer::start(const std::string& host, uint16_t port, std::string& error
         res.set_content(std::string(bytes, bytes + chunk.stereo.size() * sizeof(int16_t)),
                         "application/octet-stream");
     });
+    // --- Testsender ---
+    s.Get("/api/tx", [this](const httplib::Request&, httplib::Response& res) {
+        if (testSender_ == nullptr) {
+            sendJson(res, json{{"available", false}});
+            return;
+        }
+        json body = testSender_->toJson();
+        body["available"] = true;
+        sendJson(res, body);
+    });
+    // Antwort nach einer Änderung: Ergebnis plus aktueller Stand (die Oberfläche braucht keinen zweiten
+    // Abruf).
+    const auto txReply = [this](httplib::Response& res, bool ok, const std::string& error, json extra = {}) {
+        json body = testSender_->toJson();
+        body["available"] = true;
+        body["ok"] = ok;
+        if (!ok) {
+            body["error"] = error;
+        }
+        for (auto& [key, value] : extra.items()) {
+            body[key] = value;
+        }
+        sendJson(res, body, ok ? 200 : 400);
+    };
+    // Liest {"kind", "spec"} in einen Flow; false mit Fehlermeldung bei ungültigen Angaben.
+    const auto txParse = [](const std::string& text, bool needKind, const FlowConfig* current,
+                            FlowConfig& flow, bool& start, std::string& error) {
+        const json body = json::parse(text, nullptr, false);
+        if (body.is_discarded() || !body.is_object() || !body.contains("spec") || !body["spec"].is_string()) {
+            error = "Erwartet {\"kind\": \"video\"|\"audio\", \"spec\": \"ip:port,…\"}.";
+            return false;
+        }
+        Media media = Media::Video;
+        if (current != nullptr) {
+            media = current->media();
+        } else {
+            const std::string kind = body.value("kind", "");
+            if (needKind && kind != "video" && kind != "audio") {
+                error = "kind muss video oder audio sein.";
+                return false;
+            }
+            media = kind == "audio" ? Media::Audio : Media::Video;
+        }
+        start = body.value("start", false);
+        return parseFlowSpec(media, body["spec"].get<std::string>(), flow, error);
+    };
+    s.Post("/api/tx", [this, txReply, txParse](const httplib::Request& req, httplib::Response& res) {
+        if (testSender_ == nullptr) {
+            sendJson(res, json{{"error", "Kein Sendeport konfiguriert (--tx-port, --tx-local-ip)"}}, 409);
+            return;
+        }
+        FlowConfig flow;
+        bool start = false;
+        std::string error;
+        std::string id;
+        if (!txParse(req.body, true, nullptr, flow, start, error) ||
+            !testSender_->add(flow, start, id, error)) {
+            txReply(res, false, error);
+            return;
+        }
+        txReply(res, true, {}, json{{"id", id}});
+    });
+    s.Put(R"(/api/tx/([A-Za-z0-9_-]+))", [this, txReply, txParse](const httplib::Request& req,
+                                                                  httplib::Response& res) {
+        if (testSender_ == nullptr) {
+            sendJson(res, json{{"error", "Kein Sendeport konfiguriert (--tx-port, --tx-local-ip)"}}, 409);
+            return;
+        }
+        const std::string id = req.matches[1];
+        std::string error;
+        const FlowConfig* current = nullptr;
+        FlowConfig existing;
+        for (const auto& info : testSender_->list()) {
+            if (info.id == id) {
+                existing = info.flow;
+                current = &existing;
+            }
+        }
+        if (current == nullptr) {
+            txReply(res, false, "Testsender " + id + " nicht gefunden.");
+            return;
+        }
+        FlowConfig flow;
+        bool unused = false;
+        if (!txParse(req.body, false, current, flow, unused, error) ||
+            !testSender_->update(id, flow, error)) {
+            txReply(res, false, error);
+            return;
+        }
+        txReply(res, true, {});
+    });
+    s.Post(R"(/api/tx/([A-Za-z0-9_-]+)/(start|stop))", [this, txReply](const httplib::Request& req,
+                                                                       httplib::Response& res) {
+        if (testSender_ == nullptr) {
+            sendJson(res, json{{"error", "Kein Sendeport konfiguriert (--tx-port, --tx-local-ip)"}}, 409);
+            return;
+        }
+        std::string error;
+        const std::string id = req.matches[1];
+        const bool ok =
+            req.matches[2] == "start" ? testSender_->start(id, error) : testSender_->stop(id, error);
+        txReply(res, ok, error);
+    });
+    s.Delete(
+        R"(/api/tx/([A-Za-z0-9_-]+))", [this, txReply](const httplib::Request& req, httplib::Response& res) {
+            if (testSender_ == nullptr) {
+                sendJson(res, json{{"error", "Kein Sendeport konfiguriert (--tx-port, --tx-local-ip)"}}, 409);
+                return;
+            }
+            std::string error;
+            const bool ok = testSender_->remove(req.matches[1], error);
+            txReply(res, ok, error);
+        });
     s.Get("/api/demo", [this](const httplib::Request&, httplib::Response& res) {
         if (!demo_) {
             sendJson(res, json{{"error", "Nur im Demo-Betrieb verfügbar"}}, 404);

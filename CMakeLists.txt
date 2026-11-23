@@ -23,6 +23,7 @@ add_library(st2110_core STATIC
     src/core/FlowMonitor.cpp
     src/core/FlowTable.cpp
     src/core/MonitorHub.cpp
+    src/core/NetworkInfo.cpp
     src/core/PacketParser.cpp
     src/core/Preview.cpp
     src/core/Options.cpp
@@ -31,6 +32,7 @@ add_library(st2110_core STATIC
     src/core/SapDirectory.cpp
     src/core/Sdp.cpp
     src/core/SyntheticSender.cpp
+    src/core/TestSender.cpp
     src/core/TestSignal.cpp
     src/core/TimeSeries.cpp
     src/core/TimingStats.cpp

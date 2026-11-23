@@ -12,3 +12,4 @@ Eine überholte Entscheidung wird nicht gelöscht, sondern auf „ersetzt durch 
 | [0004](0004-web-oberflaeche-im-programm.md) | Web-Oberfläche im Messprogramm, Diagramme ohne Bibliothek | angenommen |
 | [0005](0005-mehrere-flows-und-erkennung.md) | Mehrere Flows und Flow-Erkennung über eine Kernel-Schnittstelle | vorläufig angenommen |
 | [0006](0006-vorschau.md) | Bild- und Tonvorschau im Browser (JPEG über stb_image_write) | angenommen |
+| [0007](0007-testsender-und-erkennung-am-verwaltungsport.md) | Testsender in derselben MTL-Instanz, Erkennung am Verwaltungsport | angenommen |

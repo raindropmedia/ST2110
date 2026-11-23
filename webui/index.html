@@ -40,6 +40,7 @@
   <div class="layout">
     <nav class="tabs" id="tabs" aria-label="Ansichten">
       <button data-tab="flows" class="active">Flows</button>
+      <button data-tab="txgen">Testsender</button>
       <button data-tab="overview">Übersicht</button>
       <button data-tab="preview">Vorschau</button>
       <button data-tab="video">Video ST 2110-21</button>
@@ -109,6 +110,63 @@
         <div class="card">
           <h3>Per SAP angekündigt</h3>
           <div class="table-scroll"><table class="flows" id="announcedTable"></table></div>
+        </div>
+      </section>
+
+      <!-- Testsender -->
+      <section data-view="txgen" class="view">
+        <div class="card">
+          <div class="card-head">
+            <h3>Testsender <span class="hint" id="txInfo"></span></h3>
+          </div>
+          <div class="msg error" id="txUnavailable" hidden>Kein Sendeport konfiguriert. Start mit <code>--tx-port &lt;pci&gt; --tx-local-ip &lt;ip&gt;</code>
+            (zweiter Port der Karte, nicht der Empfangsport).</div>
+          <div class="table-scroll"><table class="flows" id="txTable"></table></div>
+        </div>
+
+        <div class="card" id="txFormCard">
+          <div class="card-head"><h3 id="txFormTitle">Testsender anlegen</h3></div>
+          <form id="txForm" class="form-grid" autocomplete="off">
+            <label>Art
+              <select name="kind"><option value="video">Testbild ST 2110-20</option><option value="audio">Testton ST 2110-30</option></select>
+            </label>
+            <label>Name <input name="name" placeholder="z. B. Kamera 4"></label>
+            <label>Ziel (Adresse:Port) <input name="address" required value="239.211.0.1:20000"></label>
+            <label>Payload-Typ <input name="pt" type="number" min="0" max="127" value="96"></label>
+
+            <label data-kind="video">Auflösung <input name="resolution" list="txResolutions" value="1920x1080"></label>
+            <label data-kind="video">Bildrate
+              <select name="rate">
+                <option>23.98</option><option>24</option><option>25</option><option>29.97</option><option>30</option>
+                <option selected>50</option><option>59.94</option><option>60</option><option>100</option><option>119.88</option><option>120</option>
+              </select>
+            </label>
+            <label data-kind="video" class="check"><span>Zeilensprung (Rate = Halbbilder/s)</span><input name="interlaced" type="checkbox"></label>
+
+            <label data-kind="audio" hidden>Abtastrate
+              <select name="sampleRate"><option value="48000" selected>48 kHz</option><option value="96000">96 kHz</option></select>
+            </label>
+            <label data-kind="audio" hidden>Bittiefe
+              <select name="bitDepth"><option value="24" selected>24 Bit (L24)</option><option value="16">16 Bit (L16)</option></select>
+            </label>
+            <label data-kind="audio" hidden>Kanäle <input name="channels" type="number" min="1" max="64" value="2"></label>
+            <label data-kind="audio" hidden>Paketzeit
+              <select name="ptime"><option value="125us">125 µs</option><option value="250us">250 µs</option><option value="333us">333 µs</option><option value="1ms" selected>1 ms</option><option value="4ms">4 ms</option></select>
+            </label>
+            <div class="form-actions">
+              <button type="submit" class="btn primary" id="txSubmit">Anlegen und senden</button>
+              <button type="button" class="btn" id="txSave">Nur anlegen</button>
+              <button type="button" class="btn" id="txCancel" hidden>Abbrechen</button>
+            </div>
+          </form>
+          <div class="hint" id="txEstimate"></div>
+          <div class="msg" id="txMsg" hidden></div>
+          <datalist id="txResolutions">
+            <option value="1280x720"><option value="1920x1080"><option value="2560x1440"><option value="3840x2160">
+          </datalist>
+          <p class="hint">Testbild: Farbbalken, Grautreppe, laufendes Quadrat, Blitz zu jeder vollen Sekunde (rechts unten).
+            Testton: 1 kHz links mit EBU-Kennung (250 ms Pause alle 3 s), 2 kHz rechts, weitere Kanäle je 500 Hz · Kanalnummer, −18 dBFS.
+            Beim Start wartet MTL, bis PTP eingerastet ist (höchstens 3 min); Einstellungen lassen sich nur im gestoppten Zustand ändern.</p>
         </div>
       </section>
 

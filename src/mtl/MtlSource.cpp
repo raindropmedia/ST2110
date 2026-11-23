@@ -1,5 +1,6 @@
 #include "mtl/MtlSource.h"
 
+#include "core/TestSender.h"
 #include "core/TestSignal.h"
 
 #include <algorithm>
@@ -173,7 +174,7 @@ bool toIpv4(const std::string& text, uint8_t* out) {
 
 // Eine Sitzung des Testsenders: eigener Thread, der Bilder bzw. Tonblöcke füllt. MTL taktet die
 // Ausgabe (get_frame blockiert, bis ein Puffer frei ist) und setzt die Zeitstempel aus der PTP-Zeit.
-struct TxSession {
+struct TxSession : TxBackend::Session {
     FlowConfig flow;
     st20p_tx_handle video = nullptr;
     st30p_tx_handle audio = nullptr;
@@ -181,7 +182,7 @@ struct TxSession {
     std::atomic<bool> stopping{false};
     std::thread thread;
 
-    ~TxSession() { stop(); }
+    ~TxSession() override { stop(); }
 
     void stop() {
         stopping = true;
@@ -490,10 +491,39 @@ struct MtlSource::Impl {
     std::vector<std::unique_ptr<FlowSession>> sessions;
     std::atomic<bool> stopping{false};
     std::thread statsThread;
-    std::thread txStarter;
-    std::mutex txMutex; // schützt txSessions
     std::unique_ptr<PreviewWorker> previewWorker = std::make_unique<PreviewWorker>();
-    std::vector<std::unique_ptr<TxSession>> txSessions;
+
+    // Öffnet die Sendesitzungen des Testsenders (TestSender ruft open() aus einem Hintergrundthread: MTL
+    // wartet beim Anlegen bis zu 3 min, bis PTP eingerastet ist).
+    class TxOpener : public TxBackend {
+      public:
+        explicit TxOpener(Impl& impl) : impl_(impl) {}
+        std::unique_ptr<Session> open(const FlowConfig& flow, std::string& error) override {
+            if (impl_.stopping) {
+                error = "Programm wird beendet.";
+                return nullptr;
+            }
+            if (impl_.options.ptp) {
+                impl_.hub.addEvent("info",
+                                   "Testsender " + flow.label +
+                                       " startet (MTL wartet, bis PTP eingerastet ist, höchstens 3 min).");
+            }
+            auto tx = std::make_unique<TxSession>();
+            tx->flow = flow;
+            if (!tx->open(impl_.mtl, impl_.options.txPort->port, error)) {
+                impl_.hub.addEvent("error", "Testsender " + flow.label + ": " + error);
+                return nullptr;
+            }
+            impl_.hub.addEvent("info", "Testsender " + flow.label + " sendet " + flow.formatName() + " an " +
+                                           flow.primary().ip + ":" + std::to_string(flow.primary().udpPort));
+            return tx;
+        }
+
+      private:
+        Impl& impl_;
+    };
+    std::unique_ptr<TxOpener> txOpener;
+    std::unique_ptr<TestSender> testSender;
 
     Impl(const Options& o, MonitorHub& h) : options(o), hub(h) {}
 
@@ -502,10 +532,7 @@ struct MtlSource::Impl {
         if (statsThread.joinable()) {
             statsThread.join();
         }
-        if (txStarter.joinable()) {
-            txStarter.join(); // kann bis zum Ende der PTP-Wartezeit von MTL dauern
-        }
-        txSessions.clear();    // Sendethreads beenden, Sitzungen freigeben
+        testSender.reset();    // Sendethreads beenden, Sitzungen freigeben (wartet auf laufende Starts)
         previewWorker.reset(); // offene Rahmen werden noch zurückgegeben
         for (auto& s : sessions) {
             s->free();
@@ -513,28 +540,6 @@ struct MtlSource::Impl {
         sessions.clear();
         if (mtl != nullptr) {
             mtl_uninit(mtl);
-        }
-    }
-
-    void startTestSender() {
-        if (options.ptp) {
-            hub.addEvent("info", "Testsender wartet, bis PTP eingerastet ist (höchstens 3 min).");
-        }
-        for (const auto& flow : options.txFlows) {
-            if (stopping) {
-                return;
-            }
-            auto tx = std::make_unique<TxSession>();
-            tx->flow = flow;
-            std::string txError;
-            if (!tx->open(mtl, options.txPort->port, txError)) {
-                hub.addEvent("error", "Testsender " + flow.label + ": " + txError);
-                continue;
-            }
-            hub.addEvent("info", "Testsender " + flow.label + " sendet " + flow.formatName() + " an " +
-                                     flow.primary().ip + ":" + std::to_string(flow.primary().udpPort));
-            std::lock_guard lock(txMutex);
-            txSessions.push_back(std::move(tx));
         }
     }
 
@@ -704,13 +709,11 @@ std::unique_ptr<MtlSource> MtlSource::create(const Options& options, MonitorHub&
         params.tx_queues_cnt[i] = 0; // nur Empfang
     }
     if (txIndex >= 0) {
-        uint16_t videos = 0;
-        uint16_t audios = 0;
-        for (const auto& f : options.txFlows) {
-            (f.video ? videos : audios)++;
-        }
+        // Eine Queue je Videosender, alle Tonsender teilen sich eine; reserviert für die Höchstzahl, weil
+        // Sender auch zur Laufzeit dazukommen.
         params.rx_queues_cnt[txIndex] = 0; // PTP und ARP laufen über die Systemqueue
-        params.tx_queues_cnt[txIndex] = st_tx_sessions_queue_cnt(videos, audios, 0, 0);
+        params.tx_queues_cnt[txIndex] =
+            st_tx_sessions_queue_cnt(static_cast<uint16_t>(options.maxTxFlows), 1, 0, 0);
     }
     params.flags |= MTL_FLAG_BIND_NUMA | MTL_FLAG_DEV_AUTO_START_STOP;
     if (options.hwTimestamp) {
@@ -746,12 +749,25 @@ std::unique_ptr<MtlSource> MtlSource::create(const Options& options, MonitorHub&
     }
     Impl* raw = source->impl_.get();
     source->impl_->statsThread = std::thread([raw] { raw->statsLoop(); });
-    // Mit PTP wartet st20p_tx_create, bis PTP eingerastet ist (MTL: bis 180 s). Der Testsender startet
-    // deshalb im Hintergrund, damit Empfang und Web-Oberfläche sofort laufen.
-    if (!options.txFlows.empty()) {
-        source->impl_->txStarter = std::thread([raw] { raw->startTestSender(); });
+    if (options.txPort) {
+        raw->txOpener = std::make_unique<Impl::TxOpener>(*raw);
+        raw->testSender = std::make_unique<TestSender>(*raw->txOpener, options.maxTxFlows,
+                                                       options.txPort->port, options.txPort->localIp);
+        // Die Sender aus der Kommandozeile starten im Hintergrund, damit Empfang und Web-Oberfläche
+        // sofort laufen.
+        for (const auto& flow : options.txFlows) {
+            std::string id;
+            std::string txError;
+            if (!raw->testSender->add(flow, true, id, txError)) {
+                hub.addEvent("error", "Testsender " + flow.label + ": " + txError);
+            }
+        }
     }
     return source;
+}
+
+TestSender* MtlSource::testSender() {
+    return impl_->testSender.get();
 }
 
 std::string MtlSource::addFlow(const FlowConfig& flow, std::string& error) {

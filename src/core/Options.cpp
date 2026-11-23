@@ -337,9 +337,12 @@ void validateFlow(const FlowConfig& flow, std::vector<std::string>& errors,
 }
 
 void validateOptions(const Options& o, std::vector<std::string>& errors, std::vector<std::string>& warnings) {
-    if (o.flows.empty() && o.discoverInterface.empty() && o.txFlows.empty()) {
+    // Mit Port darf der Start ohne Flows erfolgen: Flows und Testsender lassen sich in der Oberfläche
+    // anlegen.
+    if (o.flows.empty() && o.discoverInterface.empty() && o.txFlows.empty() && o.primaryPort.port.empty() &&
+        !o.demo) {
         errors.push_back("Kein Flow angegeben (--video, --audio, --sdp), keine Erkennung (--discover) und "
-                         "kein Testsender (--tx-video, --tx-audio).");
+                         "kein Port (--port): nichts zu tun.");
     }
     if (o.maxFlows == 0 || o.maxFlows > 64) {
         errors.push_back("--max-flows muss zwischen 1 und 64 liegen.");
@@ -367,13 +370,17 @@ void validateOptions(const Options& o, std::vector<std::string>& errors, std::ve
             errors.push_back("Redundanter Flow ohne redundanten Port (--red-port, --red-local-ip).");
         }
     }
+    if (o.maxTxFlows == 0 || o.maxTxFlows > 16) {
+        errors.push_back("--max-tx-flows muss zwischen 1 und 16 liegen.");
+    } else if (o.txFlows.size() > o.maxTxFlows) {
+        errors.push_back("Mehr Testsender (" + std::to_string(o.txFlows.size()) + ") als --max-tx-flows (" +
+                         std::to_string(o.maxTxFlows) + ").");
+    }
     if (!o.txFlows.empty() || o.txPort) {
         if (o.demo) {
             errors.push_back("Der Testsender braucht die Karte (nicht mit --demo).");
         } else if (!o.txPort) {
             errors.push_back("Testsender ohne Sendeport (--tx-port, --tx-local-ip).");
-        } else if (o.txFlows.empty()) {
-            errors.push_back("Sendeport ohne Testsender-Flow (--tx-video, --tx-audio).");
         } else {
             validatePort(*o.txPort, "Sendeport", o, errors);
             if (o.txPort->port == o.primaryPort.port ||
@@ -485,6 +492,7 @@ ParseResult parseOptions(const std::vector<std::string>& args, FileReader readFi
              txPortSet = true;
              return true;
          }},
+        {"--max-tx-flows", [&](const std::string& v) { return parseUnsigned(v, o.maxTxFlows); }},
         {"--tx-video",
          [&](const std::string& v) {
              txSpecs.emplace_back(Media::Video, v);
@@ -550,7 +558,7 @@ ParseResult parseOptions(const std::vector<std::string>& args, FileReader readFi
     const std::map<std::string, std::function<void()>> flags{
         {"--demo", [&] { o.demo = true; }},   {"--no-hw-timestamp", [&] { o.hwTimestamp = false; }},
         {"--no-ptp", [&] { o.ptp = false; }}, {"--no-http", [&] { o.httpListen.clear(); }},
-        {"--no-sap", [&] { o.sap = false; }},
+        {"--no-sap", [&] { o.sap = false; }}, {"--no-discover", [&] { o.autoDiscover = false; }},
     };
 
     for (size_t i = 1; i < args.size(); ++i) {
@@ -675,6 +683,8 @@ std::string usageText(const std::string& programName) {
         << "\n"
         << "Testsender (MTL, eigener Port derselben Karte, Zeitbezug über PTP wie beim Empfang):\n"
         << "  --tx-port, --tx-local-ip    Sendeport, z. B. 0000:af:00.1, und eigene Adresse daran\n"
+        << "  --max-tx-flows <n>          Höchstzahl der Testsender (Vorgabe 4), weitere legt die Oberfläche "
+           "an\n"
         << "  --tx-video <ip:port[,…]>    Testbild (Farbbalken, laufendes Quadrat, Sekunden-Blitz);\n"
         << "                              Schlüssel: format, pt, name\n"
         << "  --tx-audio <ip:port[,…]>    Testton (1 kHz links mit EBU-Kennung, 2 kHz rechts, −18 dBFS);\n"
@@ -683,6 +693,9 @@ std::string usageText(const std::string& programName) {
         << "Erkennung:\n"
         << "  --discover <schnittstelle>  alle UDP/RTP-Flows auf einer Kernel-Schnittstelle mitlesen\n"
         << "                              (Spiegelport o. Ä.; braucht CAP_NET_RAW) und SAP empfangen\n"
+        << "                              Ohne Angabe liest das Programm im DPDK-Betrieb auf dem\n"
+        << "                              Verwaltungsport (Schnittstelle mit der Standardroute) mit.\n"
+        << "  --no-discover               keine automatische Erkennung auf dem Verwaltungsport\n"
         << "  --no-sap                    keine SAP-Ankündigungen empfangen\n"
         << "\n"
         << "Messung und Ausgabe:\n"
