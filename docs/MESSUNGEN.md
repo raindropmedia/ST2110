@@ -27,6 +27,23 @@ Kernel 7.0, MTL v26.09, DPDK 26.07, Switch MikroTik CRS309 ohne PTP-Funktion, Gr
 - **PTP im Betrieb:** `ptp4l` am Kernel-Port: 20–30 ns rms, Laufzeit rund 5 µs. Mit MTL streut die Korrektur
   je Sync um ±1,0–1,4 µs (`correct_delta` −1357 … +1454 ns auf beiden Ports) und liegt oft knapp über der
   Einrastschwelle von 1000 ns. Der erste Sync stellt die Uhr um 37 s (UTC → TAI); das zählt als Zeitsprung.
+- **Erste Messung der Kette Sender → Switch → Empfänger (2026-11-23, 17:14, MTL mit Patch 2, `--lcores 2,3`):**
+  Testbild 1920x1080p50 (YCbCr 4:2:2, 10 Bit) und drei Töne (L24, 1 ms) von Port 1 auf Port 0 über den CRS309,
+  Sender und Empfänger in einer MTL-Instanz. Im 10-s-Fenster:
+
+  | Strom | gesendet | empfangen |
+  | --- | --- | --- |
+  | Video | 2 057 464 Pakete, 50,0000 Bilder/s, 2178 Mbit/s | 2 057 456 Pakete, 50,0005 Bilder/s |
+  | Ton ×3 | je 10 000 Pakete, 100,001 Blöcke/s | je 10 000 Pakete |
+
+  Keine Verluste in den Zählern von MTL (Paketzahlen gleich bis auf die Fensterkante, `drop 0`, `epoch drop` nur
+  beim Start). Der Sender gibt zusätzlich rund 3,3 % Füllpakete ab (`pkts burst` 2 125 962 gegenüber 2 057 464
+  Videopaketen; `DEV(1)` 2262 gegenüber `DEV(0)` 2190 Mbit/s); der Switch gibt sie nicht weiter. CPU: Scheduler-Kern
+  `avg loop` 381 ns bei 7 Tasklets, Video-Empfang „cpu busy“ 2,7 %.
+- **PTP mit Patch 2 und Last (ebenda):** Korrektur Mittel 1368 ns (Drift, erwartet 1410) bei Streuung 883 bis 1853 ns;
+  `correct_delta` im Mittel 105 ns (−512 … +486); Pfadlaufzeit 5054 bis 5594 ns (ohne Last 5042 bis 5093). Das
+  doppelte Nachstellen ist weg (Mittel 1368 statt 706), die größere Streuung kommt von der Warteschlange im Switch
+  ohne PTP-Unterstützung (rund +500 ns Laufzeitschwankung bei 2,2 Gbit/s).
 - **PTP, was die Korrektur bedeutet:** MTL stellt die Kartenuhr bei jedem Sync um den gemessenen Versatz
   zurück. Die gemeldete Korrektur ist deshalb im Kern die Drift des Oszillators je Sync-Intervall: 11,3 ppm
   (`ptp4l`: −11,3 ppm) × 125 ms = 1,41 µs. Mit einer PTP-Instanz bleibt sie konstant (beobachtet 1374 bis 1433 ns,

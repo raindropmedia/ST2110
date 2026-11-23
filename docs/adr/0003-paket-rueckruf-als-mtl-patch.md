@@ -27,7 +27,13 @@ stellen denselben Quell-Timer. MTL startet je Port eine PTP-Instanz (auch auf de
 Testsenders), und jede korrigierte denselben Fehler, der Fehler wurde zweimal ausgeglichen. Der Patch lässt
 `ptp_adjust_delta` die Uhr nur auf Port P ändern, wenn der zweite Port dieselbe PCI-Karte ist (gleiches
 `dddd:bb:dd`, Treiber `ice`); dessen Instanz misst weiter. Keine Schnittstelle zum Programm, deshalb kein
-Erkennungsmakro. Auf Hardware noch nicht bestätigt (siehe `docs/MESSUNGEN.md`).
+Erkennungsmakro. Bestätigt auf der E830-L (siehe `docs/MESSUNGEN.md`).
+
+`0003-st2110-skip-only-the-timer-writes-on-the-second-port.patch` verfeinert das: Patch 2 verließ
+`ptp_adjust_delta()` vorzeitig und übersprang damit auch die Delta-Statistik des zweiten Ports (MTL-Log:
+„PTP(1): not connected“). Jetzt entfallen nur die Schreibzugriffe auf den Timer
+(`ptp_timesync_adjust_time()` und `ptp_timesync_adjust_freq()`); die zweite Instanz misst und wertet weiter aus. Als
+eigener Patch auf Patch 2, damit Rechner mit eingespieltem Patch 2 keinen Konflikt bekommen.
 
 ## Begründung
 
