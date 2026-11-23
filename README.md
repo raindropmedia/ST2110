@@ -91,6 +91,21 @@ und `--audio ip:port[,red=…][,format=L24/48000/2][,ptime=1][,pt=97][,source=�
 (höchstens `--max-flows`, Vorgabe 8). 1080i50 ist `format=1920x1080i50` (Halbbilder je Sekunde).
 `--help` zeigt alle Optionen.
 
+**Testsender:** `--tx-port`, `--tx-local-ip`, `--tx-video`, `--tx-audio` senden über einen weiteren Port
+derselben Karte Testbild (Farbbalken, laufendes Quadrat, Blitz zu jeder vollen Sekunde) und Testton
+(1 kHz links mit EBU-Kennung, 2 kHz rechts, −18 dBFS). Sender und Empfang laufen in derselben MTL-Instanz
+und nutzen dieselbe PTP-Zeit; der Sender ist ein „narrow“-Sender nach ST 2110-21. Beide Ports müssen am
+selben Netz (Switch mit PTP und IGMP) hängen; eine direkte Kabelverbindung zwischen den Ports reicht
+nicht, weil dann am Empfangsport kein PTP-Grandmaster ankommt. Beispiel:
+
+```bash
+sudo st2110-monitor --port 0000:01:00.0 --local-ip 192.168.211.100 \
+     --tx-port 0000:01:00.1 --tx-local-ip 192.168.211.101 \
+     --tx-video 239.211.0.1:20000,format=1920x1080p50 --tx-audio 239.211.0.2:30000,format=L24/48000/2 \
+     --video 239.211.0.1:20000,format=1920x1080p50,name=Testbild \
+     --audio 239.211.0.2:30000,format=L24/48000/2,name=Testton --http 0.0.0.0:8090
+```
+
 **Erkennung:** `--discover <schnittstelle>` liest auf einer **Kernel**-Schnittstelle alle UDP/RTP-Flows mit
 und empfängt SAP. Die Karte im DPDK-Betrieb sieht nur abonnierte Flows; für die Erkennung deshalb eine
 eigene Schnittstelle an einem Spiegelport (oder ohne IGMP-Snooping) vorsehen

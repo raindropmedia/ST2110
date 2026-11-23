@@ -1,5 +1,7 @@
 #include "mtl/MtlSource.h"
 
+#include "core/TestSignal.h"
+
 #include <algorithm>
 #include <arpa/inet.h>
 #include <atomic>
@@ -12,6 +14,8 @@
 #include <mutex>
 #include <st20_api.h>
 #include <st30_api.h>
+#include <st30_pipeline_api.h>
+#include <st_pipeline_api.h>
 #include <thread>
 #include <vector>
 
@@ -166,6 +170,146 @@ bool toIpv4(const std::string& text, uint8_t* out) {
 }
 
 } // namespace
+
+// Eine Sitzung des Testsenders: eigener Thread, der Bilder bzw. Tonblöcke füllt. MTL taktet die
+// Ausgabe (get_frame blockiert, bis ein Puffer frei ist) und setzt die Zeitstempel aus der PTP-Zeit.
+struct TxSession {
+    FlowConfig flow;
+    st20p_tx_handle video = nullptr;
+    st30p_tx_handle audio = nullptr;
+    std::unique_ptr<TestPatternGenerator> pattern;
+    std::atomic<bool> stopping{false};
+    std::thread thread;
+
+    ~TxSession() { stop(); }
+
+    void stop() {
+        stopping = true;
+        if (thread.joinable()) {
+            thread.join();
+        }
+        if (video != nullptr) {
+            st20p_tx_free(video);
+            video = nullptr;
+        }
+        if (audio != nullptr) {
+            st30p_tx_free(audio);
+            audio = nullptr;
+        }
+    }
+
+    // Port und Ziel eintragen (ohne ST 2022-7).
+    static bool fillPort(struct st_tx_port& port, const std::string& txPort, const FlowConfig& flow,
+                         std::string& error) {
+        port.num_port = 1;
+        std::snprintf(port.port[0], MTL_PORT_MAX_LEN, "%s", txPort.c_str());
+        if (!toIpv4(flow.primary().ip, port.dip_addr[0])) {
+            error = "Ungültige Zieladresse: " + flow.primary().ip;
+            return false;
+        }
+        port.udp_port[0] = flow.primary().udpPort;
+        port.payload_type = flow.payloadType();
+        return true;
+    }
+
+    bool open(mtl_handle mtl, const std::string& txPort, std::string& error) {
+        if (flow.video) {
+            const auto& v = *flow.video;
+            struct st20p_tx_ops ops {};
+            ops.name = flow.label.c_str();
+            ops.priv = this;
+            if (!fillPort(ops.port, txPort, flow, error)) {
+                return false;
+            }
+            ops.width = v.format.width;
+            ops.height = v.format.height;
+            ops.fps = toMtlFps(v.format.rate);
+            ops.interlaced = v.format.interlaced;
+            // Das Testbild liegt schon im Transportformat vor: keine Wandlung in MTL.
+            ops.input_fmt = ST_FRAME_FMT_YUV422RFC4175PG2BE10;
+            ops.transport_fmt = ST20_FMT_YUV_422_10BIT;
+            ops.transport_pacing = ST21_PACING_NARROW;
+            ops.device = ST_PLUGIN_DEVICE_AUTO;
+            ops.framebuff_cnt = 3;
+            ops.flags = ST20P_TX_FLAG_BLOCK_GET;
+            pattern =
+                std::make_unique<TestPatternGenerator>(v.format.width, v.format.height, v.format.interlaced);
+            video = st20p_tx_create(mtl, &ops);
+            if (video == nullptr) {
+                error = "st20p_tx_create fehlgeschlagen (Format, Adresse, Sendeport; Details im MTL-Log).";
+                return false;
+            }
+            thread = std::thread([this] { videoLoop(); });
+            return true;
+        }
+        const auto& a = *flow.audio;
+        struct st30p_tx_ops ops {};
+        ops.name = flow.label.c_str();
+        ops.priv = this;
+        if (!fillPort(ops.port, txPort, flow, error)) {
+            return false;
+        }
+        ops.fmt = a.format.bitDepth == 16 ? ST30_FMT_PCM16 : ST30_FMT_PCM24;
+        ops.channel = a.format.channels;
+        ops.sampling = a.format.sampleRate == 96000 ? ST30_SAMPLING_96K : ST30_SAMPLING_48K;
+        ops.ptime = toMtlPtime(a.format.ptime);
+        ops.framebuff_cnt = 4;
+        // Blöcke zu 10 ms: wenig Aufwand je Block, Ton bleibt nah an der Echtzeit.
+        const int size = st30_calculate_framebuff_size(ops.fmt, ops.ptime, ops.sampling, ops.channel,
+                                                       10ULL * 1000 * 1000, nullptr);
+        if (size <= 0) {
+            error = "Tonformat wird von MTL nicht unterstützt (st30_calculate_framebuff_size).";
+            return false;
+        }
+        ops.framebuff_size = static_cast<uint32_t>(size);
+        ops.flags = ST30P_TX_FLAG_BLOCK_GET;
+        audio = st30p_tx_create(mtl, &ops);
+        if (audio == nullptr) {
+            error = "st30p_tx_create fehlgeschlagen (Format, Adresse, Sendeport; Details im MTL-Log).";
+            return false;
+        }
+        thread = std::thread([this] { audioLoop(); });
+        return true;
+    }
+
+    void videoLoop() {
+        const auto& format = flow.video->format;
+        // Bilder bzw. Halbbilder je Sekunde (bei Zeilensprung nennt format.rate wie bei MTL die Halbbilder):
+        // der Inhalt läuft gleichmäßig, unabhängig von der Uhrzeit.
+        const double rate = 1e9 / framePeriodNs(format.rate);
+        uint64_t index = 0;
+        while (!stopping) {
+            struct st_frame* frame = st20p_tx_get_frame(video);
+            if (frame == nullptr) {
+                continue; // Zeitüberschreitung (1 s), z. B. solange der Link fehlt
+            }
+            const bool secondField = format.interlaced && (index % 2 == 1);
+            frame->second_field = secondField;
+            pattern->render(static_cast<uint8_t*>(frame->addr[0]), frame->linesize[0],
+                            static_cast<double>(index) / rate, secondField);
+            st20p_tx_put_frame(video, frame);
+            ++index;
+        }
+    }
+
+    void audioLoop() {
+        const auto& format = flow.audio->format;
+        const size_t bytesPerFrame = static_cast<size_t>(format.channels) * (format.bitDepth / 8u);
+        uint64_t sampleIndex = 0;
+        while (!stopping) {
+            struct st30_frame* frame = st30p_tx_get_frame(audio);
+            if (frame == nullptr) {
+                continue;
+            }
+            const size_t frames = frame->buffer_size / bytesPerFrame;
+            renderTestTonePcm(static_cast<uint8_t*>(frame->addr), sampleIndex, frames, format.channels,
+                              format.sampleRate, format.bitDepth);
+            frame->data_size = frames * bytesPerFrame;
+            st30p_tx_put_frame(audio, frame);
+            sampleIndex += frames;
+        }
+    }
+};
 
 struct FlowSession;
 
@@ -347,6 +491,7 @@ struct MtlSource::Impl {
     std::atomic<bool> stopping{false};
     std::thread statsThread;
     std::unique_ptr<PreviewWorker> previewWorker = std::make_unique<PreviewWorker>();
+    std::vector<std::unique_ptr<TxSession>> txSessions;
 
     Impl(const Options& o, MonitorHub& h) : options(o), hub(h) {}
 
@@ -355,6 +500,7 @@ struct MtlSource::Impl {
         if (statsThread.joinable()) {
             statsThread.join();
         }
+        txSessions.clear();    // Sendethreads beenden, Sitzungen freigeben
         previewWorker.reset(); // offene Rahmen werden noch zurückgegeben
         for (auto& s : sessions) {
             s->free();
@@ -509,9 +655,16 @@ std::unique_ptr<MtlSource> MtlSource::create(const Options& options, MonitorHub&
     auto impl = std::make_unique<Impl>(options, hub);
 
     struct mtl_init_params params {};
-    params.num_ports = options.redundantPort ? 2 : 1;
-    const PortOptions* ports[2] = {&options.primaryPort,
-                                   options.redundantPort ? &*options.redundantPort : nullptr};
+    // Ports: P, dann R (ST 2022-7), dann der Sendeport des Testsenders.
+    std::vector<const PortOptions*> ports{&options.primaryPort};
+    if (options.redundantPort) {
+        ports.push_back(&*options.redundantPort);
+    }
+    const int txIndex = options.txPort ? static_cast<int>(ports.size()) : -1;
+    if (options.txPort) {
+        ports.push_back(&*options.txPort);
+    }
+    params.num_ports = static_cast<uint8_t>(ports.size());
     for (int i = 0; i < params.num_ports; ++i) {
         std::snprintf(params.port[i], MTL_PORT_MAX_LEN, "%s", ports[i]->port.c_str());
         params.pmd[i] = mtl_pmd_by_port_name(params.port[i]);
@@ -522,6 +675,15 @@ std::unique_ptr<MtlSource> MtlSource::create(const Options& options, MonitorHub&
         // Je Flow eine Empfangs-Queue; auch für Flows, die erst zur Laufzeit dazukommen.
         params.rx_queues_cnt[i] = static_cast<uint16_t>(options.maxFlows);
         params.tx_queues_cnt[i] = 0; // nur Empfang
+    }
+    if (txIndex >= 0) {
+        uint16_t videos = 0;
+        uint16_t audios = 0;
+        for (const auto& f : options.txFlows) {
+            (f.video ? videos : audios)++;
+        }
+        params.rx_queues_cnt[txIndex] = 0; // PTP und ARP laufen über die Systemqueue
+        params.tx_queues_cnt[txIndex] = st_tx_sessions_queue_cnt(videos, audios, 0, 0);
     }
     params.flags |= MTL_FLAG_BIND_NUMA | MTL_FLAG_DEV_AUTO_START_STOP;
     if (options.hwTimestamp) {
@@ -554,6 +716,18 @@ std::unique_ptr<MtlSource> MtlSource::create(const Options& options, MonitorHub&
             error = (flow.label.empty() ? flow.primary().ip : flow.label) + ": " + flowError;
             return nullptr;
         }
+    }
+    for (const auto& flow : options.txFlows) {
+        auto tx = std::make_unique<TxSession>();
+        tx->flow = flow;
+        std::string txError;
+        if (!tx->open(source->impl_->mtl, options.txPort->port, txError)) {
+            error = "Testsender " + flow.label + ": " + txError;
+            return nullptr;
+        }
+        hub.addEvent("info", "Testsender " + flow.label + " sendet " + flow.formatName() + " an " +
+                                 flow.primary().ip + ":" + std::to_string(flow.primary().udpPort));
+        source->impl_->txSessions.push_back(std::move(tx));
     }
     Impl* raw = source->impl_.get();
     source->impl_->statsThread = std::thread([raw] { raw->statsLoop(); });

@@ -95,6 +95,8 @@ Ohne Sender lässt sich die Kette mit dem Beispielprogramm von MTL auf Port 1 pr
   Port 0 mit Link 10 Gbit/s, Port 1 ohne Link. Mit 10 Gbit/s passt 1080p, kein 2160p.
 - [x] ice aus Kernel 7.0 mit DDP „ICE OS Default Package“ 1.3.43.0 (Ubuntu liefert es komprimiert, entpackt mit
   `setup-host.sh ddp`), PTP initialisiert
+- [x] Im CPU-Steckplatz liegen beide Ports in einer IOMMU-Gruppe (die Root-Ports des i7-4790 können kein ACS):
+  DPDK meldet sonst „VFIO group is not viable“. Beide Ports an `vfio-pci` binden (`setup-host.sh` warnt).
 - [ ] E830-L: TSN-Pacing beim Senden und `PTP_SYS_OFFSET_PRECISE` auf der Karte prüfen (MTL testet `12de` nicht)
 - [ ] Firmware-, Treiber- und DPDK-Version notiert (`docs/MESSUNGEN.md`)
 - [ ] Erste Messung gegen bekannten Sender, Abgleich mit EBU LIST

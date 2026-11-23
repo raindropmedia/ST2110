@@ -337,8 +337,9 @@ void validateFlow(const FlowConfig& flow, std::vector<std::string>& errors,
 }
 
 void validateOptions(const Options& o, std::vector<std::string>& errors, std::vector<std::string>& warnings) {
-    if (o.flows.empty() && o.discoverInterface.empty()) {
-        errors.push_back("Kein Flow angegeben (--video, --audio, --sdp) und keine Erkennung (--discover).");
+    if (o.flows.empty() && o.discoverInterface.empty() && o.txFlows.empty()) {
+        errors.push_back("Kein Flow angegeben (--video, --audio, --sdp), keine Erkennung (--discover) und "
+                         "kein Testsender (--tx-video, --tx-audio).");
     }
     if (o.maxFlows == 0 || o.maxFlows > 64) {
         errors.push_back("--max-flows muss zwischen 1 und 64 liegen.");
@@ -352,7 +353,8 @@ void validateOptions(const Options& o, std::vector<std::string>& errors, std::ve
         anyRedundant = anyRedundant || f.redundant().has_value();
     }
     // Reine Erkennung (Netz-Scanner) braucht keinen Port der Karte.
-    const bool scannerOnly = o.flows.empty() && !o.discoverInterface.empty() && o.primaryPort.port.empty();
+    const bool scannerOnly =
+        o.flows.empty() && o.txFlows.empty() && !o.discoverInterface.empty() && o.primaryPort.port.empty();
     if (!o.demo && !scannerOnly) {
         validatePort(o.primaryPort, "Port P", o, errors);
         if (o.redundantPort) {
@@ -363,6 +365,32 @@ void validateOptions(const Options& o, std::vector<std::string>& errors, std::ve
         }
         if (anyRedundant && !o.redundantPort) {
             errors.push_back("Redundanter Flow ohne redundanten Port (--red-port, --red-local-ip).");
+        }
+    }
+    if (!o.txFlows.empty() || o.txPort) {
+        if (o.demo) {
+            errors.push_back("Der Testsender braucht die Karte (nicht mit --demo).");
+        } else if (!o.txPort) {
+            errors.push_back("Testsender ohne Sendeport (--tx-port, --tx-local-ip).");
+        } else if (o.txFlows.empty()) {
+            errors.push_back("Sendeport ohne Testsender-Flow (--tx-video, --tx-audio).");
+        } else {
+            validatePort(*o.txPort, "Sendeport", o, errors);
+            if (o.txPort->port == o.primaryPort.port ||
+                (o.redundantPort && o.txPort->port == o.redundantPort->port)) {
+                errors.push_back("Der Sendeport muss ein anderer Port als P und R sein.");
+            }
+            if (isKernelPort(o.txPort->port)) {
+                errors.push_back(
+                    "Der Testsender braucht einen DPDK-Port (PCI-Adresse), keinen kernel:-Port.");
+            }
+        }
+        for (const auto& f : o.txFlows) {
+            validateFlow(f, errors, warnings);
+            if (f.redundant()) {
+                errors.push_back((f.label.empty() ? f.primary().ip : f.label) +
+                                 ": Der Testsender sendet ohne ST 2022-7 (kein red=).");
+            }
         }
     }
     if (o.intervalSec == 0) {
@@ -415,6 +443,9 @@ ParseResult parseOptions(const std::vector<std::string>& args, FileReader readFi
     Options o;
     PortOptions redPort;
     bool redPortSet = false;
+    PortOptions txPort;
+    bool txPortSet = false;
+    std::vector<std::pair<Media, std::string>> txSpecs;
     std::vector<std::string> sdpFiles;
     std::vector<std::pair<Media, std::string>> flowSpecs;
 
@@ -441,6 +472,28 @@ ParseResult parseOptions(const std::vector<std::string>& args, FileReader readFi
              redPort.localIp = v;
              redPortSet = true;
              return true;
+         }},
+        {"--tx-port",
+         [&](const std::string& v) {
+             txPort.port = v;
+             txPortSet = true;
+             return true;
+         }},
+        {"--tx-local-ip",
+         [&](const std::string& v) {
+             txPort.localIp = v;
+             txPortSet = true;
+             return true;
+         }},
+        {"--tx-video",
+         [&](const std::string& v) {
+             txSpecs.emplace_back(Media::Video, v);
+             return !v.empty();
+         }},
+        {"--tx-audio",
+         [&](const std::string& v) {
+             txSpecs.emplace_back(Media::Audio, v);
+             return !v.empty();
          }},
         {"--video",
          [&](const std::string& v) {
@@ -552,6 +605,19 @@ ParseResult parseOptions(const std::vector<std::string>& args, FileReader readFi
         }
         o.flows.push_back(flow);
     }
+    for (const auto& [media, spec] : txSpecs) {
+        FlowConfig flow;
+        std::string error;
+        if (!parseFlowSpec(media, spec, flow, error)) {
+            result.errors.push_back((media == Media::Video ? "--tx-video " : "--tx-audio ") + spec + ": " +
+                                    error);
+            continue;
+        }
+        if (flow.label.empty()) {
+            flow.label = media == Media::Video ? "Testsender Video" : "Testsender Ton";
+        }
+        o.txFlows.push_back(flow);
+    }
     for (const auto& file : sdpFiles) {
         std::string text;
         if (!readFile(file, text)) {
@@ -571,6 +637,9 @@ ParseResult parseOptions(const std::vector<std::string>& args, FileReader readFi
     }
     if (redPortSet) {
         o.redundantPort = redPort;
+    }
+    if (txPortSet) {
+        o.txPort = txPort;
     }
 
     if (!result.errors.empty()) {
@@ -603,6 +672,13 @@ std::string usageText(const std::string& programName) {
         << "                              0.333, 4), pt=97, source=ip, red-source=ip, name=Text\n"
         << "  --sdp <datei>               alle Video- und Tonmedien der SDP (DUP-Gruppen ergeben P und R)\n"
         << "  --max-flows <n>             Höchstzahl gleichzeitiger Flows (Vorgabe 8)\n"
+        << "\n"
+        << "Testsender (MTL, eigener Port derselben Karte, Zeitbezug über PTP wie beim Empfang):\n"
+        << "  --tx-port, --tx-local-ip    Sendeport, z. B. 0000:af:00.1, und eigene Adresse daran\n"
+        << "  --tx-video <ip:port[,…]>    Testbild (Farbbalken, laufendes Quadrat, Sekunden-Blitz);\n"
+        << "                              Schlüssel: format, pt, name\n"
+        << "  --tx-audio <ip:port[,…]>    Testton (1 kHz links mit EBU-Kennung, 2 kHz rechts, −18 dBFS);\n"
+        << "                              Schlüssel: format, ptime, pt, name\n"
         << "\n"
         << "Erkennung:\n"
         << "  --discover <schnittstelle>  alle UDP/RTP-Flows auf einer Kernel-Schnittstelle mitlesen\n"

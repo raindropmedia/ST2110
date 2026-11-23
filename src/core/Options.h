@@ -81,6 +81,11 @@ struct Options {
     // Höchstzahl gleichzeitig überwachter Flows (MTL reserviert dafür Empfangs-Queues).
     unsigned maxFlows = 8;
 
+    // Testsender (nur mit MTL): sendet Testbild bzw. Testton über einen eigenen Port derselben
+    // MTL-Instanz; Zeitbezug wie beim Empfang (PTP über MTL). Ohne ST 2022-7.
+    std::optional<PortOptions> txPort;
+    std::vector<FlowConfig> txFlows;
+
     // Flow-Erkennung: Kernel-Schnittstelle, deren Pakete mitgelesen werden (leer = aus), und
     // SAP-Ankündigungen auf derselben Schnittstelle.
     std::string discoverInterface;

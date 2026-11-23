@@ -251,3 +251,48 @@ TEST_CASE("Adressprüfungen") {
     uint16_t port = 0;
     CHECK(parseListen("0.0.0.0:80", host, port));
 }
+
+TEST_CASE("Testsender: eigener Port, Video und Ton") {
+    auto args = baseArgs();
+    for (const char* a : {"--tx-port", "0000:af:00.1", "--tx-local-ip", "192.168.10.11", "--tx-video",
+                          "239.10.0.1:20000,format=1920x1080p50", "--tx-audio",
+                          "239.10.0.2:30000,format=L24/48000/2,name=Ton"}) {
+        args.emplace_back(a);
+    }
+    auto r = parseOptions(args, fakeRead);
+    REQUIRE(r.options);
+    REQUIRE(r.options->txPort);
+    CHECK(r.options->txPort->port == "0000:af:00.1");
+    REQUIRE(r.options->txFlows.size() == 2);
+    CHECK(r.options->txFlows[0].label == "Testsender Video");
+    CHECK(r.options->txFlows[1].label == "Ton");
+    CHECK(r.options->txFlows[1].audio->format.channels == 2);
+}
+
+TEST_CASE("Testsender: Fehler werden gemeldet") {
+    auto withTx = [](std::vector<std::string> extra) {
+        auto args = baseArgs();
+        args.insert(args.end(), extra.begin(), extra.end());
+        return parseOptions(args, fakeRead);
+    };
+    CHECK(contains(withTx({"--tx-video", "239.1.1.1:20000"}).errors, "ohne Sendeport"));
+    CHECK(contains(withTx({"--tx-port", "0000:af:00.1", "--tx-local-ip", "192.168.10.11"}).errors,
+                   "ohne Testsender-Flow"));
+    CHECK(contains(withTx({"--tx-port", "0000:af:00.0", "--tx-local-ip", "192.168.10.11", "--tx-video",
+                           "239.1.1.1:20000"})
+                       .errors,
+                   "anderer Port"));
+    CHECK(contains(withTx({"--tx-port", "0000:af:00.1", "--tx-local-ip", "192.168.10.11", "--tx-video",
+                           "239.1.1.1:20000,red=239.2.1.1:20000"})
+                       .errors,
+                   "ohne ST 2022-7"));
+}
+
+TEST_CASE("Testsender allein, ohne Empfangsflow") {
+    auto r =
+        parseOptions({"st2110-monitor", "--port", "0000:af:00.0", "--local-ip", "192.168.10.10", "--tx-port",
+                      "0000:af:00.1", "--tx-local-ip", "192.168.10.11", "--tx-audio", "239.1.1.2:30000"},
+                     fakeRead);
+    CHECK(r.errors.empty());
+    CHECK(r.options.has_value());
+}

@@ -10,6 +10,7 @@ add_executable(st2110_tests
     test_ptp.cpp
     test_sdp.cpp
     test_timing_stats.cpp
+    test_test_signal.cpp
     test_video_timing.cpp
 )
 target_link_libraries(st2110_tests PRIVATE st2110_core doctest::doctest)

@@ -31,6 +31,7 @@ add_library(st2110_core STATIC
     src/core/SapDirectory.cpp
     src/core/Sdp.cpp
     src/core/SyntheticSender.cpp
+    src/core/TestSignal.cpp
     src/core/TimeSeries.cpp
     src/core/TimingStats.cpp
     src/core/VideoPacketAnalyzer.cpp
