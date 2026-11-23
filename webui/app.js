@@ -594,16 +594,20 @@
     $('ptpTiles').innerHTML = [
       tile(p.state, 'Zustand', ptpLabel[p.state], [
         ['letzter Sync vor', p.sinceLastSyncSec !== null ? fmt(p.sinceLastSyncSec, 2) + ' s' : '–'],
-        ['Einrasten / Ausrasten', '< ' + fmt(p.lockThresholdNs, 0) + ' ns (8 Syncs) / ≥ ' + fmt(p.unlockThresholdNs, 0) + ' ns'],
+        ['Einrasten / Ausrasten', 'Abweichung vom Mittel < ' + fmt(p.lockThresholdNs, 0) + ' ns (8 Syncs) / ≥ ' + fmt(p.unlockThresholdNs, 0) + ' ns'],
         ['Zeitsprünge (≥ 1 ms)', p.steps ? `${fmt(p.steps, 0)} · zuletzt ${fmt(p.lastStepNs, 0)} ns` : 'keine']]),
       tile(p.state, 'Letzte Korrektur', p.lastDeltaNs !== null ? fmt(p.lastDeltaNs, 0) + ' ns' : '–', [
+        ['Mittel der letzten Syncs (Drift je Sync)', p.driftNs !== null ? fmt(p.driftNs, 0) + ' ns' : '–'],
         ['min / mittel / max', p.deltaNs ? rangeText(p.deltaNs, 1, 0) + ' ns' : '–']]),
       tile('', 'UTC-Versatz Grandmaster', p.utcOffset !== null ? p.utcOffset + ' s' : '–', [['Syncs', fmt(p.syncs, 0)]]),
     ].join('');
     Charts.series(charts.ptpSeries, [{ data: p.series, color: C('--accent'), label: 'Korrektur', use: 'max' }], {
       window: state.window, unit: 'ns',
-      markers: [{ y: p.lockThresholdNs, label: 'Schwelle', color: C('--wide'), include: false },
-                { y: -p.lockThresholdNs, label: '', color: C('--wide'), include: false }, { y: 0, label: '', color: C('--ideal') }] });
+      // Schwellen um den Mittelwert: MTL stellt die Uhr je Sync zurück, die Korrektur ist im Kern die Drift
+      // des Oszillators (≈ 1,4 µs bei 11 ppm und 125 ms Abstand), nicht der Fehler.
+      markers: [{ y: (p.driftNs || 0) + p.lockThresholdNs, label: 'Schwelle', color: C('--wide'), include: false },
+                { y: (p.driftNs || 0) - p.lockThresholdNs, label: '', color: C('--wide'), include: false },
+                { y: p.driftNs || 0, label: 'Mittel', color: C('--ideal') }] });
     Charts.histogram(charts.ptpHist, p.histogram, { unit: 'ns', logY: false, color: C('--accent'),
       markers: [{ x: 0, label: '0', color: C('--ideal') }] });
   }

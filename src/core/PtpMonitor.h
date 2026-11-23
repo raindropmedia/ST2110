@@ -20,12 +20,16 @@ const char* ptpStateName(PtpState state);
 class PtpMonitor {
   public:
     struct Settings {
-        double lockThresholdNs = 1000; // |delta| darunter gilt als eingerastet
-        size_t lockSamples = 8;        // so viele aufeinanderfolgende Syncs unter der Schwelle
-        // Hysterese: Ein eingerasteter Zustand geht erst verloren, wenn ein Sync diese Schwelle erreicht.
+        // MTL stellt die Kartenuhr bei jedem Sync um den gemessenen Versatz zurück. Die gemeldete Korrektur
+        // ist deshalb im Kern die Drift des Oszillators je Sync-Intervall (11 ppm × 125 ms ≈ 1,4 µs) und kein
+        // Maß für die Güte. Bewertet wird die Streuung der Korrektur um ihren Mittelwert (Median der letzten
+        // lockSamples Syncs): ein stabiler Regler liefert eine fast konstante Korrektur (hier ±30 ns).
+        double lockThresholdNs = 500; // |Korrektur − Drift| darunter gilt als eingerastet
+        size_t lockSamples = 8;       // so viele aufeinanderfolgende Syncs unter der Schwelle
+        // Hysterese: Ein eingerasteter Zustand geht erst verloren, wenn ein Sync diese Abweichung erreicht.
         // Ohne sie meldete ein einzelner Ausreißer knapp über lockThresholdNs sofort "nicht eingerastet"
-        // und nach acht Syncs wieder "eingerastet" (Switch ohne PTP-Unterstützung: Streuung um 1 µs).
-        double unlockThresholdNs = 2000;
+        // und nach acht Syncs wieder "eingerastet".
+        double unlockThresholdNs = 1000;
         // Korrekturen ab dieser Größe sind Zeitsprünge (beim ersten Sync stellt MTL die Uhr um den
         // UTC-TAI-Versatz von 37 s). Sie zählen für sich und gehen nicht in Verlauf, Histogramm und Maximum
         // ein, sonst zeigt "max" bis zum Zurücksetzen 37 s.
@@ -43,6 +47,8 @@ class PtpMonitor {
     int16_t utcOffset() const { return utcOffset_; }
     bool hasSync() const { return syncs_ > 0; }
     int64_t lastDeltaNs() const { return lastDelta_; }
+    // Mittlere Korrektur je Sync (Median der letzten Syncs): die Drift des Oszillators.
+    double driftNs() const { return drift_; }
     uint64_t steps() const { return steps_; }
     int64_t lastStepNs() const { return lastStep_; }
     double lastSyncSec() const { return lastSyncSec_; }
@@ -63,6 +69,7 @@ class PtpMonitor {
     double lastSyncSec_ = 0;
     std::deque<int64_t> recent_;
     bool locked_ = false;
+    double drift_ = 0;
     uint64_t steps_ = 0;
     int64_t lastStep_ = 0;
     Range total_;

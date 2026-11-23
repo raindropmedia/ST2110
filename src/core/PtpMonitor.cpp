@@ -3,7 +3,9 @@
 #include "core/Report.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
+#include <vector>
 
 namespace st2110 {
 
@@ -33,10 +35,6 @@ void PtpMonitor::onSync(double nowSec, int64_t deltaNs, int16_t utcOffset) {
     utcOffset_ = utcOffset;
     lastDelta_ = deltaNs;
     lastSyncSec_ = nowSec;
-    recent_.push_back(deltaNs);
-    while (recent_.size() > settings_.lockSamples) {
-        recent_.pop_front();
-    }
     const auto magnitude = static_cast<double>(std::llabs(deltaNs));
     if (magnitude >= settings_.stepThresholdNs) {
         ++steps_;
@@ -45,14 +43,25 @@ void PtpMonitor::onSync(double nowSec, int64_t deltaNs, int16_t utcOffset) {
         recent_.clear(); // nach einem Zeitsprung von vorn einrasten
         return;
     }
+    recent_.push_back(deltaNs);
+    while (recent_.size() > settings_.lockSamples) {
+        recent_.pop_front();
+    }
+    // Drift = Median der letzten Korrekturen; bewertet wird die Abweichung davon
+    std::vector<int64_t> sorted(recent_.begin(), recent_.end());
+    std::sort(sorted.begin(), sorted.end());
+    const size_t mid = sorted.size() / 2;
+    drift_ = sorted.size() % 2 == 1
+                 ? static_cast<double>(sorted[mid])
+                 : (static_cast<double>(sorted[mid - 1]) + static_cast<double>(sorted[mid])) / 2;
+    const auto deviation = [&](int64_t d) { return std::fabs(static_cast<double>(d) - drift_); };
     if (locked_) {
-        if (magnitude >= std::max(settings_.unlockThresholdNs, settings_.lockThresholdNs)) {
+        if (deviation(deltaNs) >= std::max(settings_.unlockThresholdNs, settings_.lockThresholdNs)) {
             locked_ = false;
         }
     } else if (recent_.size() >= settings_.lockSamples) {
-        locked_ = std::all_of(recent_.begin(), recent_.end(), [&](int64_t d) {
-            return static_cast<double>(std::llabs(d)) < settings_.lockThresholdNs;
-        });
+        locked_ = std::all_of(recent_.begin(), recent_.end(),
+                              [&](int64_t d) { return deviation(d) < settings_.lockThresholdNs; });
     }
     total_.add(static_cast<double>(deltaNs));
     interval_.add(static_cast<double>(deltaNs));
@@ -87,6 +96,7 @@ nlohmann::json PtpMonitor::toJson(double nowSec, double windowSec, size_t maxPoi
         {"sinceLastSyncSec", syncs_ ? nlohmann::json(nowSec - lastSyncSec_) : nlohmann::json(nullptr)},
         {"lockThresholdNs", settings_.lockThresholdNs},
         {"unlockThresholdNs", settings_.unlockThresholdNs},
+        {"driftNs", syncs_ > steps_ ? nlohmann::json(drift_) : nlohmann::json(nullptr)},
         {"steps", steps_},
         {"lastStepNs", steps_ ? nlohmann::json(lastStep_) : nlohmann::json(nullptr)},
         {"deltaNs", rangeToJson(total_)},

@@ -27,10 +27,23 @@ Kernel 7.0, MTL v26.09, DPDK 26.07, Switch MikroTik CRS309 ohne PTP-Funktion, Gr
 - **PTP im Betrieb:** `ptp4l` am Kernel-Port: 20–30 ns rms, Laufzeit rund 5 µs. Mit MTL streut die Korrektur
   je Sync um ±1,0–1,4 µs (`correct_delta` −1357 … +1454 ns auf beiden Ports) und liegt oft knapp über der
   Einrastschwelle von 1000 ns. Der erste Sync stellt die Uhr um 37 s (UTC → TAI); das zählt als Zeitsprung.
-- **Verdacht (noch zu bestätigen):** Beide Ports der E830 teilen sich einen Quell-Timer (DPDK `ice`:
-  „shared source timer“); MTL startet je Port eine PTP-Instanz, und beide stellen denselben Timer nach. Hinweis
-  im Log: Port 1 sieht nach dem Start keinen 37-s-Sprung, Port 0 schon. Gegenprobe: Start ohne `--tx-port`
-  (nur eine Instanz) oder mit `patches/mtl/v26.09/0002-…`; dann sollte die Streuung deutlich sinken.
+- **PTP, was die Korrektur bedeutet:** MTL stellt die Kartenuhr bei jedem Sync um den gemessenen Versatz
+  zurück. Die gemeldete Korrektur ist deshalb im Kern die Drift des Oszillators je Sync-Intervall: 11,3 ppm
+  (`ptp4l`: −11,3 ppm) × 125 ms = 1,41 µs. Mit einer PTP-Instanz bleibt sie konstant (beobachtet 1374 bis 1433 ns,
+  also ±30 ns Messrauschen, wie bei `ptp4l`). Die Güte zeigt die Streuung um diesen Mittelwert, nicht der
+  Absolutwert; der Monitor bewertet deshalb die Abweichung vom Median der letzten 8 Syncs.
+- **Beide Ports stellen denselben Timer nach (belegt, 2026-11-23, 16:36 bis 16:38):** Die Ports der E830 teilen sich
+  einen Quell-Timer (DPDK `ice`: „shared source timer“); MTL startet je Port eine PTP-Instanz, beide stellen nach. Das
+  Muster passt genau: Korrektur im Mittel 706 ns (= halbe Drift) mit wechselnden Werten zwischen etwa 0 und 1440 ns;
+  ein Modell mit doppelter Korrektur ergibt 701 ns, mit einfacher 1412 ns (beobachtet in den Phasen, in denen nur
+  eine Instanz nachstellte: 1408 ns). Folge: Spannweite des Zeitfehlers doppelt so groß, Port 1 sieht keinen
+  37-s-Sprung. Behebung: `patches/mtl/v26.09/0002-…`. Nach dem Patch auf Hardware noch zu bestätigen
+  (Erwartung: konstante Korrektur um 1,4 µs, `correct_delta` nahe 0).
+- **Audio mit Paketzeit unter 0,5 ms** (125, 250, 333 µs): MTL taktet per Ratenbegrenzung, belegt je Sitzung
+  zwei Sende-Queues (`ST30_TX_RL_QUEUES_USED`) und sendet je Tonpaket 3 Füllpakete in voller Größe (rund 380 Mbit/s
+  bei einem Tonsender mit 125 µs; `DEV(1)` 2556 Mbit/s bei 2178 Mbit/s Video). Ton ab 1 ms taktet per TSC und teilt
+  sich eine Queue. Das Anlegen eines dritten Senders dieser Art scheiterte mit `init rl fail -5`, weil nur fünf Queues
+  reserviert waren; jetzt `2 × --max-tx-flows + 1`.
 - **`--lcores 2,3`:** MTL übergibt `-l 0,2,3` und DPDK nummeriert die Kerne neu (`--remap-lcore-ids`); „lcore 1“ im
   Log ist damit CPU 2. Ohne die Angabe lief der Scheduler auf CPU 1, die nicht isoliert war.
 

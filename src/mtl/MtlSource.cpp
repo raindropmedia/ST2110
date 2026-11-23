@@ -266,7 +266,9 @@ struct TxSession : TxBackend::Session {
         ops.flags = ST30P_TX_FLAG_BLOCK_GET;
         audio = st30p_tx_create(mtl, &ops);
         if (audio == nullptr) {
-            error = "st30p_tx_create fehlgeschlagen (Format, Adresse, Sendeport; Details im MTL-Log).";
+            error = "st30p_tx_create fehlgeschlagen (Format, Adresse, Sendeport; keine freie Sende-Queue? "
+                    "Ton mit Paketzeit unter 1 ms braucht zwei Queues, --max-tx-flows erhöhen; Details im "
+                    "MTL-Log).";
             return false;
         }
         thread = std::thread([this] { audioLoop(); });
@@ -709,11 +711,14 @@ std::unique_ptr<MtlSource> MtlSource::create(const Options& options, MonitorHub&
         params.tx_queues_cnt[i] = 0; // nur Empfang
     }
     if (txIndex >= 0) {
-        // Eine Queue je Videosender, alle Tonsender teilen sich eine; reserviert für die Höchstzahl, weil
-        // Sender auch zur Laufzeit dazukommen.
+        // Reserviert für die Höchstzahl, weil Sender auch zur Laufzeit dazukommen. Ein Videosender braucht
+        // eine Queue. Ton mit Paketzeit unter 0,5 ms (125, 250, 333 µs) taktet MTL per Ratenbegrenzung und
+        // belegt je Sitzung zwei eigene Queues (ST30_TX_RL_QUEUES_USED); Ton ab 1 ms teilt sich eine Queue.
+        // Im Schlimmsten Fall sind alle Sender solche Tonsender: zwei Queues je Sender, dazu die gemeinsame
+        // Tonqueue. st_tx_sessions_queue_cnt() rechnet nur mit einer Queue für allen Ton und reicht dafür
+        // nicht (gemessen: "init rl fail -5" bei der dritten Tonsitzung mit 125 µs).
         params.rx_queues_cnt[txIndex] = 0; // PTP und ARP laufen über die Systemqueue
-        params.tx_queues_cnt[txIndex] =
-            st_tx_sessions_queue_cnt(static_cast<uint16_t>(options.maxTxFlows), 1, 0, 0);
+        params.tx_queues_cnt[txIndex] = static_cast<uint16_t>(2 * options.maxTxFlows + 1);
     }
     params.flags |= MTL_FLAG_BIND_NUMA | MTL_FLAG_DEV_AUTO_START_STOP;
     if (options.hwTimestamp) {
