@@ -376,6 +376,9 @@ void validateOptions(const Options& o, std::vector<std::string>& errors, std::ve
         errors.push_back("Mehr Testsender (" + std::to_string(o.txFlows.size()) + ") als --max-tx-flows (" +
                          std::to_string(o.maxTxFlows) + ").");
     }
+    if (o.txQueues > 64) {
+        errors.push_back("--tx-queues muss zwischen 1 und 64 liegen.");
+    }
     if (!o.txFlows.empty() || o.txPort) {
         if (o.demo) {
             errors.push_back("Der Testsender braucht die Karte (nicht mit --demo).");
@@ -493,6 +496,7 @@ ParseResult parseOptions(const std::vector<std::string>& args, FileReader readFi
              return true;
          }},
         {"--max-tx-flows", [&](const std::string& v) { return parseUnsigned(v, o.maxTxFlows); }},
+        {"--tx-queues", [&](const std::string& v) { return parseUnsigned(v, o.txQueues); }},
         {"--tx-video",
          [&](const std::string& v) {
              txSpecs.emplace_back(Media::Video, v);
@@ -660,6 +664,13 @@ ParseResult parseOptions(const std::vector<std::string>& args, FileReader readFi
     return result;
 }
 
+unsigned txQueueCount(unsigned maxTxFlows, unsigned override) {
+    if (override > 0) {
+        return override;
+    }
+    return std::min(2 * maxTxFlows + 1, kAutoTxQueueLimit);
+}
+
 std::string usageText(const std::string& programName) {
     std::ostringstream out;
     out << "Aufruf: " << programName << " [Optionen]\n"
@@ -685,6 +696,8 @@ std::string usageText(const std::string& programName) {
         << "  --tx-port, --tx-local-ip    Sendeport, z. B. 0000:af:00.1, und eigene Adresse daran\n"
         << "  --max-tx-flows <n>          Höchstzahl der Testsender (Vorgabe 4), weitere legt die Oberfläche "
            "an\n"
+        << "  --tx-queues <n>             Sende-Queues des Sendeports (Vorgabe: 2 je Sender, höchstens 7;\n"
+        << "                              die E830 startete mit 9 nicht)\n"
         << "  --tx-video <ip:port[,…]>    Testbild (Farbbalken, laufendes Quadrat, Sekunden-Blitz);\n"
         << "                              Schlüssel: format, pt, name\n"
         << "  --tx-audio <ip:port[,…]>    Testton (1 kHz links mit EBU-Kennung, 2 kHz rechts, −18 dBFS);\n"

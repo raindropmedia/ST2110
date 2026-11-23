@@ -44,6 +44,12 @@ Kernel 7.0, MTL v26.09, DPDK 26.07, Switch MikroTik CRS309 ohne PTP-Funktion, Gr
   bei einem Tonsender mit 125 µs; `DEV(1)` 2556 Mbit/s bei 2178 Mbit/s Video). Ton ab 1 ms taktet per TSC und teilt
   sich eine Queue. Das Anlegen eines dritten Senders dieser Art scheiterte mit `init rl fail -5`, weil nur fünf Queues
   reserviert waren; jetzt `2 × --max-tx-flows + 1`.
+- **Sende-Queues am E830-Port (2026-11-23):** Mit 9 angeforderten Sende-Queues scheiterte der Start:
+  `ICE_DRIVER: ice_tx_queue_start(): Failed to add lan txq`, `fail to start Tx queue 8`, danach
+  `Device failed to Start`, MTL fiel für Port 1 auf TSC-Pacing zurück und `mtl_init` scheiterte (die Queues 0 bis 7
+  liefen; Ursache in Firmware oder Scheduler, nicht aufgeklärt). Seit dem Fix für die Tonsitzungen verlangte
+  das Programm 2 × `--max-tx-flows` + 1 = 9; jetzt höchstens 7 (`--tx-queues` überschreibt). Mit höchstens 7 Queues
+  passen ein Video und drei Töne mit 125 µs, oder ein Video und beliebig viele Töne ab 1 ms (teilen sich eine Queue).
 - **`--lcores 2,3`:** MTL übergibt `-l 0,2,3` und DPDK nummeriert die Kerne neu (`--remap-lcore-ids`); „lcore 1“ im
   Log ist damit CPU 2. Ohne die Angabe lief der Scheduler auf CPU 1, die nicht isoliert war.
 

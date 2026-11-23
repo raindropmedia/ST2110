@@ -23,8 +23,10 @@ bewusst angeben zu müssen.
   gelten je Sitzung und ändern sich nur im gestoppten Zustand (Stoppen, Ändern, Starten). Die Beschreibung ist
   dieselbe wie bei `--tx-video`/`--tx-audio` (`parseFlowSpec`), damit Kommandozeile und Oberfläche gleich
   prüfen.
-- MTL legt die Sende-Queues beim Start fest: eine je Videosender, eine gemeinsame für Ton. Reserviert wird für
-  `--max-tx-flows` (Vorgabe 4); der Sendeport (`--tx-port`) muss beim Start feststehen.
+- MTL legt die Sende-Queues beim Start fest. Ein Videosender braucht eine, Ton mit Paketzeit unter 0,5 ms zwei
+  (Ratenbegrenzung), Ton ab 1 ms teilt sich eine. Reserviert wird für `--max-tx-flows` (Vorgabe 4): 2 je Sender
+  plus eine, höchstens 7, weil die E830 mit 9 Queues nicht startete (`--tx-queues` überschreibt). Der Sendeport
+  (`--tx-port`) muss beim Start feststehen.
 - Das Testbild entsteht direkt im Transportformat (YCbCr 4:2:2, 10 Bit, RFC 4175; `TestPatternGenerator`),
   die Bänder einmal vorberechnet, je Bild nur Zeilen kopieren und das Quadrat zeichnen. MTL wandelt nichts.
   Der Sender ist ein „narrow“-Sender; unter E8xx taktet MTL per Rate-Limit statt TSN, am Empfänger

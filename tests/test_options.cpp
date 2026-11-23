@@ -331,3 +331,21 @@ TEST_CASE("Start nur mit Port: Flows und Testsender kommen aus der Oberfläche")
     REQUIRE(off.options);
     CHECK_FALSE(off.options->autoDiscover);
 }
+
+TEST_CASE("Sende-Queues: automatisch begrenzt, mit --tx-queues überschreibbar") {
+    CHECK(txQueueCount(1, 0) == 3);
+    CHECK(txQueueCount(2, 0) == 5);
+    CHECK(txQueueCount(4, 0) == kAutoTxQueueLimit); // 2 × 4 + 1 = 9 startete auf der E830 nicht
+    CHECK(txQueueCount(16, 0) == kAutoTxQueueLimit);
+    CHECK(txQueueCount(4, 12) == 12);
+    auto r = parseOptions({"x", "--port", "0000:af:00.0", "--local-ip", "10.0.0.1", "--tx-port",
+                           "0000:af:00.1", "--tx-local-ip", "10.0.0.2", "--tx-queues", "8"},
+                          fakeRead);
+    REQUIRE(r.options);
+    CHECK(r.options->txQueues == 8);
+    CHECK(
+        contains(parseOptions({"x", "--port", "0000:af:00.0", "--local-ip", "10.0.0.1", "--tx-queues", "100"},
+                              fakeRead)
+                     .errors,
+                 "--tx-queues"));
+}

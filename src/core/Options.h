@@ -68,6 +68,15 @@ std::vector<FlowConfig> flowsFromSdp(const std::string& sdpText, std::vector<std
 void validateFlow(const FlowConfig& flow, std::vector<std::string>& errors,
                   std::vector<std::string>& warnings);
 
+// Mehr Sende-Queues als hier hat die E830 (E830-L, Firmware 1.3833, ice/DPDK 26.07) am Sendeport nicht
+// gestartet: "ice_tx_queue_start(): Failed to add lan txq", Queue 8 (die neunte); acht Queues liefen. Das
+// Gerät startet dann nicht, und mtl_init scheitert. Mit --tx-queues lässt sich mehr versuchen.
+constexpr unsigned kAutoTxQueueLimit = 7;
+
+// Sende-Queues, die MTL für den Sendeport reservieren soll: ein Videosender braucht eine, Ton mit Paketzeit
+// unter 0,5 ms zwei (Ratenbegrenzung), dazu eine gemeinsame Tonqueue.
+unsigned txQueueCount(unsigned maxTxFlows, unsigned override);
+
 enum class LogLevel { Debug, Info, Notice, Warning, Error };
 
 // Optionen des Messprogramms st2110-monitor.
@@ -88,6 +97,8 @@ struct Options {
     std::optional<PortOptions> txPort;
     std::vector<FlowConfig> txFlows;
     unsigned maxTxFlows = 4;
+    // Sende-Queues des Sendeports; 0 = automatisch (2 je Sender, höchstens kAutoTxQueueLimit).
+    unsigned txQueues = 0;
 
     // Flow-Erkennung: Kernel-Schnittstelle, deren Pakete mitgelesen werden (leer = aus), und
     // SAP-Ankündigungen auf derselben Schnittstelle.
