@@ -54,7 +54,14 @@ def main() -> int:
     parser.add_argument("--leave", action="store_true", help="Gruppe verlassen statt beitreten")
     args = parser.parse_args()
 
-    with open(f"/sys/class/net/{args.interface}/address", encoding="ascii") as f:
+    try:
+        f = open(f"/sys/class/net/{args.interface}/address", encoding="ascii")
+    except FileNotFoundError:
+        print(f"Schnittstelle {args.interface} gibt es nicht. Hängt der Port noch an vfio-pci?\n"
+              "  sudo scripts/setup-host.sh unbind <pci> && sudo ip link set <schnittstelle> up",
+              file=sys.stderr)
+        return 1
+    with f:
         src_mac = bytes.fromhex(f.read().strip().replace(":", ""))
     frame = build_frame(src_mac, args.source_ip, args.group, args.router_alert, args.leave)
     with socket.socket(socket.AF_PACKET, socket.SOCK_RAW) as s:
