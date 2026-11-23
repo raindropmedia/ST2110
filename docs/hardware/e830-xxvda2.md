@@ -97,6 +97,11 @@ Ohne Sender lässt sich die Kette mit dem Beispielprogramm von MTL auf Port 1 pr
   `setup-host.sh ddp`), PTP initialisiert
 - [x] Im CPU-Steckplatz liegen beide Ports in einer IOMMU-Gruppe (die Root-Ports des i7-4790 können kein ACS):
   DPDK meldet sonst „VFIO group is not viable“. Beide Ports an `vfio-pci` binden (`setup-host.sh` warnt).
+- [ ] PTP über MTL: Der Switch (IGMP-Snooping, RSTP) leitet 224.0.1.129 nur nach einem Join weiter. Am Kernel-Port
+  rastet `ptp4l` ein (Grandmaster `001b21.fffe.f24f58`, ST 2059-2, Domain 127, rms 20–30 ns, Laufzeit ≈ 5 µs). Ein
+  Join wie von MTL (IGMPv3, ohne Router Alert, `scripts/igmp-probe.py`) wird angenommen; Router Alert ist nicht die
+  Ursache. Unter MTL kam trotzdem kein PTP an (`PTP(0): not connected`, 40 s beobachtet). Verdacht: MTL sendet
+  den Join direkt nach dem Link-Aufbau, solange der Switch-Port per RSTP noch nicht weiterleitet.
 - [ ] E830-L: TSN-Pacing beim Senden und `PTP_SYS_OFFSET_PRECISE` auf der Karte prüfen (MTL testet `12de` nicht)
 - [ ] Firmware-, Treiber- und DPDK-Version notiert (`docs/MESSUNGEN.md`)
 - [ ] Erste Messung gegen bekannten Sender, Abgleich mit EBU LIST
