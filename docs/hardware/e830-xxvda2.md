@@ -97,6 +97,9 @@ Ohne Sender lässt sich die Kette mit dem Beispielprogramm von MTL auf Port 1 pr
   `setup-host.sh ddp`), PTP initialisiert
 - [x] Im CPU-Steckplatz liegen beide Ports in einer IOMMU-Gruppe (die Root-Ports des i7-4790 können kein ACS):
   DPDK meldet sonst „VFIO group is not viable“. Beide Ports an `vfio-pci` binden (`setup-host.sh` warnt).
+- [x] Switch im Messnetz: MikroTik CRS309-1G-8S+ (8 × SFP+, nur 10 Gbit/s; ein 25G-Modul an Port 1 bekam deshalb
+  keinen Link). Ohne PTP-Funktion (weder Boundary noch Transparent Clock): PTP läuft durch, die Laufzeitschwankung
+  im Switch geht ungefiltert in den Uhrenabgleich ein (unter Last mehr als die 20–30 ns ohne Last).
 - [ ] PTP über MTL: Der Switch (IGMP-Snooping, RSTP) leitet 224.0.1.129 nur nach einem Join weiter. Am Kernel-Port
   rastet `ptp4l` ein (Grandmaster `001b21.fffe.f24f58`, ST 2059-2, Domain 127, rms 20–30 ns, Laufzeit ≈ 5 µs). Ein
   Join wie von MTL (IGMPv3, ohne Router Alert, `scripts/igmp-probe.py`) wird angenommen; Router Alert ist nicht die
