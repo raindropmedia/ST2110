@@ -93,7 +93,10 @@ for dev in /sys/bus/pci/devices/*; do
 			[ -e "$net" ] || continue
 			ifname=$(basename "$net")
 			speed=$(cat "$net/speed" 2>/dev/null || echo "?")
-			info "Schnittstelle: $ifname, Link: ${speed} Mbit/s"
+			case "$speed" in
+			-1 | "?" | "") info "Schnittstelle: $ifname, kein Link" ;;
+			*) info "Schnittstelle: $ifname, Link: ${speed} Mbit/s" ;;
+			esac
 			if command -v ethtool >/dev/null 2>&1; then
 				fw=$(ethtool -i "$ifname" 2>/dev/null | awk -F': ' '/^firmware-version/ {print $2}')
 				ver=$(ethtool -i "$ifname" 2>/dev/null | awk -F': ' '/^version/ {print $2}')

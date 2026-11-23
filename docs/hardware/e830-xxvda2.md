@@ -81,15 +81,16 @@ Ohne Sender lässt sich die Kette mit dem Beispielprogramm von MTL auf Port 1 pr
 
 - [x] Karte geliefert (2026-11-20): Controller **E830-L SFP** (`8086:12de`), nicht `12d3`; Firmware
   `1.00 0x80016d80 1.3833.0`, Ubuntu Server 26.04.1, Kernel 7.0.0-44, ice aus dem Kernel
-- [ ] PCIe: Karte steckt in einem Steckplatz mit 5 GT/s x2 (rund 8 Gbit/s brutto) – reicht nicht für
-  2160p, für 2 × 25 GbE nötig: PCIe 4.0 x8 (Steckplatz an der CPU)
 - [ ] Messrechner (Stand 2026-11-20): Core i7-4790 (Haswell, 4 Kerne/8 Threads, AVX2, kein ART für
   `PTP_SYS_OFFSET_PRECISE`). Der Steckplatz der Karte hängt am Chipsatz (PCIe 2.0), der x16-Steckplatz an der CPU
   (PCIe 3.0) trug anfangs die Grafikkarte. VT-d war im BIOS aus und ist eingeschaltet
 - [x] Erste Karte defekt: Die Firmware antwortete nach dem Start nicht mehr (`ethtool`/`devlink` mit
   `Input/output error`, zeitweise scheinbar Recovery-Modus), kein Link. Am 2026-11-23 getauscht, die Ersatzkarte
   bekommt Link. Vermutungen zu Steckplatz, IOMMU und `irdma` als Ursache waren damit unbelegt und sind zurückgenommen.
-- [ ] Ersatzkarte: PCI-ID, Firmware (`devlink dev info`), Steckplatz und PCIe-Anbindung nachtragen
+- [x] Ersatzkarte (2026-11-23): wieder E830-L SFP (`8086:12de`), Board `N32931-006`, im x16-Steckplatz an der CPU
+  mit PCIe 3.0 x8 (8 GT/s, rund 63 Gbit/s; die Karte könnte 16 GT/s). Firmware wie bei der ersten Karte:
+  fw.mgmt 7.7.48 (API 1.7.11), NVM/PSID 1.00, Bundle `0x80016d80`, UNDI 1.3833.0, Netlist 0.0.1100-7.57.0.
+  Port 0 mit Link 10 Gbit/s, Port 1 ohne Link. Mit 10 Gbit/s passt 1080p, kein 2160p.
 - [x] ice aus Kernel 7.0 mit DDP „ICE OS Default Package“ 1.3.43.0 (Ubuntu liefert es komprimiert, entpackt mit
   `setup-host.sh ddp`), PTP initialisiert
 - [ ] E830-L: TSN-Pacing beim Senden und `PTP_SYS_OFFSET_PRECISE` auf der Karte prüfen (MTL testet `12de` nicht)
