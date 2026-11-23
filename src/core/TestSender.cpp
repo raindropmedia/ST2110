@@ -273,7 +273,8 @@ nlohmann::json TestSender::toJson() const {
             item["video"] = json{{"width", v.width},
                                  {"height", v.height},
                                  {"rate", frameRateName(v.rate)},
-                                 {"interlaced", v.interlaced}};
+                                 {"interlaced", v.interlaced},
+                                 {"startVrx", f.video->startVrx}};
         } else {
             const auto& a = f.audio->format;
             item["audio"] = json{{"sampleRate", a.sampleRate},

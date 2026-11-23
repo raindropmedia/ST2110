@@ -27,6 +27,9 @@ bewusst angeben zu müssen.
   (Ratenbegrenzung), Ton ab 1 ms teilt sich eine. Reserviert wird für `--max-tx-flows` (Vorgabe 4): 2 je Sender
   plus eine, höchstens 7, weil die E830 mit 9 Queues nicht startete (`--tx-queues` überschreibt). Der Sendeport
   (`--tx-port`) muss beim Start feststehen.
+- Pacing: `--tx-pacing auto|rl|tsc|tsn` (MTL `pacing`); auf der E830 wählt MTL von selbst die Ratenbegrenzung, TSN
+  (Launch-Time) nur auf Wunsch. Je Videosender lässt sich der Vorlauf `start-vrx` einstellen. Gemessen: Mit
+  Ratenbegrenzung ist der Sender „wide“ (VRX 15 statt höchstens 8), siehe `docs/MESSUNGEN.md`.
 - Das Testbild entsteht direkt im Transportformat (YCbCr 4:2:2, 10 Bit, RFC 4175; `TestPatternGenerator`),
   die Bänder einmal vorberechnet, je Bild nur Zeilen kopieren und das Quadrat zeichnen. MTL wandelt nichts.
   Der Sender ist ein „narrow“-Sender; unter E8xx taktet MTL per Rate-Limit statt TSN, am Empfänger

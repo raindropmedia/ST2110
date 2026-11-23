@@ -40,6 +40,23 @@ Kernel 7.0, MTL v26.09, DPDK 26.07, Switch MikroTik CRS309 ohne PTP-Funktion, Gr
   beim Start). Der Sender gibt zusätzlich rund 3,3 % Füllpakete ab (`pkts burst` 2 125 962 gegenüber 2 057 464
   Videopaketen; `DEV(1)` 2262 gegenüber `DEV(0)` 2190 Mbit/s); der Switch gibt sie nicht weiter. CPU: Scheduler-Kern
   `avg loop` 381 ns bei 7 Tasklets, Video-Empfang „cpu busy“ 2,7 %.
+- **Video-Timing des Testsenders am Empfänger (2026-11-23, 17:20, Oberfläche, 1920x1080p50, Pacing: Ratenbegrenzung):**
+  Urteil von MTL **wide**, nicht narrow. IPT (n = 17,0 Mio.) p50 4,14 µs, p99 6,33 µs, max 16,9 µs bei TRS rund 4,7 µs
+  (mehrere Gipfel, der Sender liegt im Mittel über der Rate und gleicht mit Pausen aus). Cinst p50 0,5, p99 8,8,
+  max 12 Pakete (narrow-Grenze rund 4). VRX p50 15,6, p99 16,9, max 16 Pakete (narrow-Grenze 8, wide 720).
+  FPT rund 760 µs, also TR_OFFSET (≈ 764 µs bei 1080p50); Latenz nahe 0 auf der 800-µs-Skala (wenige µs).
+  Paketprofil: Die Pakete treffen etwa 72 µs (≈ 15 Paketzeiten) vor „TR_OFFSET + i·TRS“ ein, erst in einem schnellen
+  Abschnitt am Bildanfang (rund 100 Pakete mit IPT unter TRS; Cinst fällt von 12 auf 0), danach als Sägezahn mit
+  7 µs Hub und einer Periode von etwa 300 bis 350 Paketen (≈ 1,5 ms; wohl der Takt des Ratenbegrenzers). MTL
+  rechnet den Vorlauf des Senders auf `narrow − 4` = 4 Pakete, gemessen sind 15: die Ratenbegrenzung der Karte
+  sendet zu Beginn zu viel auf einmal. Das ist ein Merkmal des Senders (E830-L, Rate-Limit-Pacing), nicht der
+  Messung: Der Empfänger bewertet richtig. Zu prüfen: `start-vrx=0` bzw. 1 bis 2 im Testsender und
+  `--tx-pacing tsn` (Launch-Time).
+  Einzelne VRX-Werte um −30 im Histogramm (Ursache offen, vermutlich das erste Bild nach dem Start).
+- **PTP unter Last, zwei Ports gleichzeitig (17:20):** Port 0 (empfängt das Video): Korrektur 850 bis 1924 ns, Pfadlaufzeit
+  5045 bis 5607 ns; Port 1 (sendet nur): Korrektur 1353 bis 1927 ns, Laufzeit 5046 bis 5102 ns. Die Sync-Pakete von
+  Port 0 stehen im Switch (ohne PTP-Funktion) hinter dem Videostrom an; Port 1 sieht kaum Last und damit rund
+  10-mal weniger Streuung.
 - **PTP mit Patch 2 und Last (ebenda):** Korrektur Mittel 1368 ns (Drift, erwartet 1410) bei Streuung 883 bis 1853 ns;
   `correct_delta` im Mittel 105 ns (−512 … +486); Pfadlaufzeit 5054 bis 5594 ns (ohne Last 5042 bis 5093). Das
   doppelte Nachstellen ist weg (Mittel 1368 statt 706), die größere Streuung kommt von der Warteschlange im Switch

@@ -349,3 +349,31 @@ TEST_CASE("Sende-Queues: automatisch begrenzt, mit --tx-queues überschreibbar")
                      .errors,
                  "--tx-queues"));
 }
+
+TEST_CASE("Testsender: Pacing-Art und Start-VRX") {
+    CHECK(parseTxPacing("tsn") == TxPacing::Tsn);
+    CHECK(parseTxPacing("rl") == TxPacing::RateLimit);
+    CHECK(parseTxPacing("tsc") == TxPacing::Tsc);
+    CHECK(parseTxPacing("auto") == TxPacing::Auto);
+    CHECK_FALSE(parseTxPacing("schnell").has_value());
+    CHECK(std::string(txPacingName(TxPacing::Tsn)) == "tsn");
+
+    auto args = baseArgs();
+    for (const char* a : {"--tx-port", "0000:af:00.1", "--tx-local-ip", "192.168.10.11", "--tx-pacing", "tsn",
+                          "--tx-video", "239.10.0.9:20000,format=1920x1080p50,start-vrx=2"}) {
+        args.emplace_back(a);
+    }
+    auto r = parseOptions(args, fakeRead);
+    REQUIRE(r.options);
+    CHECK(r.options->txPacing == TxPacing::Tsn);
+    REQUIRE(r.options->txFlows.size() == 1);
+    CHECK(r.options->txFlows[0].video->startVrx == 2);
+    CHECK(contains(
+        parseOptions({"x", "--port", "0000:af:00.0", "--local-ip", "10.0.0.1", "--tx-pacing", "x"}, fakeRead)
+            .errors,
+        "--tx-pacing"));
+    // Start-VRX gilt nur für Video
+    FlowConfig audio;
+    std::string error;
+    CHECK_FALSE(parseFlowSpec(Media::Audio, "239.1.1.1:30000,start-vrx=2", audio, error));
+}

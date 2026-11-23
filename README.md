@@ -98,6 +98,9 @@ dieselbe PTP-Zeit ([ADR 0007](docs/adr/0007-testsender-und-erkennung-am-verwaltu
 am selben Netz (Switch mit PTP und IGMP) hängen; ein Kabel direkt zwischen den Ports reicht nicht, weil dann am
 Empfangsport kein PTP-Grandmaster ankommt.
 
+`--tx-pacing tsn` schaltet das Pacing von der Ratenbegrenzung auf die Launch-Time der Karte (braucht PF, PTP und
+Unterstützung durch Karte und Treiber); je Videosender stellt „Start-VRX“ den Vorlauf in Paketzeiten ein (`start-vrx=`).
+
 Nur der Sendeport wird beim Start angegeben (`--tx-port`, `--tx-local-ip`; `--max-tx-flows` und `--tx-queues`
 reservieren Sende-Queues: ein Videosender braucht eine, Ton mit Paketzeit unter 1 ms zwei, höchstens 7 automatisch). Alles Weitere stellt man im Tab **Testsender** der Oberfläche ein: Video (Auflösung, Bildrate,
 Zeilensprung), Ton (Abtastrate 48/96 kHz, 16/24 Bit, 1–64 Kanäle, Paketzeit 125 µs bis 4 ms), Ziel und

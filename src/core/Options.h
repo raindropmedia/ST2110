@@ -31,6 +31,9 @@ struct VideoFlow {
     std::optional<FlowAddress> redundant;
     VideoFormat format;
     uint8_t payloadType = 96;
+    // Nur Testsender: Vorlauf des ersten Pakets in Paketzeiten vor TR_OFFSET (MTL start_vrx), 0 = MTL wählt
+    // selbst (bei Ratenbegrenzung narrow − 4). Schlüssel start-vrx.
+    uint16_t startVrx = 0;
 };
 
 struct AudioFlow {
@@ -77,6 +80,14 @@ constexpr unsigned kAutoTxQueueLimit = 7;
 // unter 0,5 ms zwei (Ratenbegrenzung), dazu eine gemeinsame Tonqueue.
 unsigned txQueueCount(unsigned maxTxFlows, unsigned override);
 
+// Pacing der Sendeports (MTL mtl_init_params.pacing). Auto wählt auf der E8xx die Ratenbegrenzung, TSN
+// (Launch-Time der Karte) nur auf ausdrücklichen Wunsch; es braucht die PF, PTP und
+// Launch-Time-Unterstützung.
+enum class TxPacing { Auto, RateLimit, Tsc, Tsn };
+
+std::optional<TxPacing> parseTxPacing(const std::string& text);
+const char* txPacingName(TxPacing pacing);
+
 enum class LogLevel { Debug, Info, Notice, Warning, Error };
 
 // Optionen des Messprogramms st2110-monitor.
@@ -99,6 +110,7 @@ struct Options {
     unsigned maxTxFlows = 4;
     // Sende-Queues des Sendeports; 0 = automatisch (2 je Sender, höchstens kAutoTxQueueLimit).
     unsigned txQueues = 0;
+    TxPacing txPacing = TxPacing::Auto;
 
     // Flow-Erkennung: Kernel-Schnittstelle, deren Pakete mitgelesen werden (leer = aus), und
     // SAP-Ankündigungen auf derselben Schnittstelle.

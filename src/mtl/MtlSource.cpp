@@ -232,6 +232,7 @@ struct TxSession : TxBackend::Session {
             ops.transport_pacing = ST21_PACING_NARROW;
             ops.device = ST_PLUGIN_DEVICE_AUTO;
             ops.framebuff_cnt = 3;
+            ops.start_vrx = v.startVrx;
             ops.flags = ST20P_TX_FLAG_BLOCK_GET;
             pattern =
                 std::make_unique<TestPatternGenerator>(v.format.width, v.format.height, v.format.interlaced);
@@ -729,6 +730,20 @@ std::unique_ptr<MtlSource> MtlSource::create(const Options& options, MonitorHub&
         params.flags |= MTL_FLAG_PTP_ENABLE;
         params.ptp_sync_notify = &Impl::onPtpSync;
     }
+    switch (options.txPacing) {
+    case TxPacing::Auto:
+        params.pacing = ST21_TX_PACING_WAY_AUTO;
+        break;
+    case TxPacing::RateLimit:
+        params.pacing = ST21_TX_PACING_WAY_RL;
+        break;
+    case TxPacing::Tsc:
+        params.pacing = ST21_TX_PACING_WAY_TSC;
+        break;
+    case TxPacing::Tsn:
+        params.pacing = ST21_TX_PACING_WAY_TSN;
+        break;
+    }
     params.priv = impl.get();
     params.log_level = toMtlLogLevel(options.logLevel);
     if (!options.lcores.empty()) {
@@ -740,7 +755,8 @@ std::unique_ptr<MtlSource> MtlSource::create(const Options& options, MonitorHub&
     if (impl->mtl == nullptr) {
         error = "mtl_init fehlgeschlagen (Port an DPDK gebunden? Hugepages? Rechte? Meldet das MTL-Log "
                 "\"Failed to "
-                "add lan txq\", dann zu viele Sende-Queues: --tx-queues bzw. --max-tx-flows verringern).";
+                "add lan txq\", dann zu viele Sende-Queues: --tx-queues bzw. --max-tx-flows verringern; "
+                "bei \"not support tsn launch time\" geht --tx-pacing tsn auf dieser Karte nicht).";
         return nullptr;
     }
     if (!hasPacketHook()) {

@@ -193,6 +193,8 @@ bool parseFlowSpec(Media media, const std::string& text, FlowConfig& flow, std::
             redSource = value;
         } else if (key == "name") {
             flow.label = value;
+        } else if (key == "start-vrx" && media == Media::Video) {
+            ok = parseUnsigned(value, video.startVrx);
         } else if (key == "pt") {
             ok = parseUnsigned(value, media == Media::Video ? video.payloadType : audio.payloadType);
         } else if (key == "format" && media == Media::Video) {
@@ -496,6 +498,14 @@ ParseResult parseOptions(const std::vector<std::string>& args, FileReader readFi
              return true;
          }},
         {"--max-tx-flows", [&](const std::string& v) { return parseUnsigned(v, o.maxTxFlows); }},
+        {"--tx-pacing",
+         [&](const std::string& v) {
+             auto pacing = parseTxPacing(v);
+             if (pacing) {
+                 o.txPacing = *pacing;
+             }
+             return pacing.has_value();
+         }},
         {"--tx-queues", [&](const std::string& v) { return parseUnsigned(v, o.txQueues); }},
         {"--tx-video",
          [&](const std::string& v) {
@@ -671,6 +681,36 @@ unsigned txQueueCount(unsigned maxTxFlows, unsigned override) {
     return std::min(2 * maxTxFlows + 1, kAutoTxQueueLimit);
 }
 
+std::optional<TxPacing> parseTxPacing(const std::string& text) {
+    if (text == "auto") {
+        return TxPacing::Auto;
+    }
+    if (text == "rl") {
+        return TxPacing::RateLimit;
+    }
+    if (text == "tsc") {
+        return TxPacing::Tsc;
+    }
+    if (text == "tsn") {
+        return TxPacing::Tsn;
+    }
+    return std::nullopt;
+}
+
+const char* txPacingName(TxPacing pacing) {
+    switch (pacing) {
+    case TxPacing::Auto:
+        return "auto";
+    case TxPacing::RateLimit:
+        return "rl";
+    case TxPacing::Tsc:
+        return "tsc";
+    case TxPacing::Tsn:
+        return "tsn";
+    }
+    return "auto";
+}
+
 std::string usageText(const std::string& programName) {
     std::ostringstream out;
     out << "Aufruf: " << programName << " [Optionen]\n"
@@ -696,10 +736,14 @@ std::string usageText(const std::string& programName) {
         << "  --tx-port, --tx-local-ip    Sendeport, z. B. 0000:af:00.1, und eigene Adresse daran\n"
         << "  --max-tx-flows <n>          Höchstzahl der Testsender (Vorgabe 4), weitere legt die Oberfläche "
            "an\n"
+        << "  --tx-pacing <art>           auto (Vorgabe: Ratenbegrenzung), rl, tsc oder tsn (Launch-Time "
+           "der\n"
+        << "                              Karte; braucht PF, PTP und Unterstützung durch Karte und Treiber)\n"
         << "  --tx-queues <n>             Sende-Queues des Sendeports (Vorgabe: 2 je Sender, höchstens 7;\n"
         << "                              die E830 startete mit 9 nicht)\n"
         << "  --tx-video <ip:port[,…]>    Testbild (Farbbalken, laufendes Quadrat, Sekunden-Blitz);\n"
-        << "                              Schlüssel: format, pt, name\n"
+        << "                              Schlüssel: format, pt, name, start-vrx (Vorlauf in Paketen, 0 = "
+           "automatisch)\n"
         << "  --tx-audio <ip:port[,…]>    Testton (1 kHz links mit EBU-Kennung, 2 kHz rechts, −18 dBFS);\n"
         << "                              Schlüssel: format, ptime, pt, name\n"
         << "\n"

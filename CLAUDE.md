@@ -20,7 +20,8 @@ getestet (doctest, Playwright-Screenshots der Oberfläche, Erkennung auf `lo` mi
 gelaufen. Referenzkarte E830-XXVDA2, geliefert mit E830-L-Controller (`8086:12de`), Messrechner mit Ubuntu Server 26.04.1;
 MTL v26.09 ist installiert, Empfang und PTP laufen auf der Karte; Testsender (Tab „Testsender“) und Erkennung am
 Verwaltungsport sind gebaut und getestet (doctest inkl. ThreadSanitizer-Lauf der Verwaltung, Oberfläche im Demo-Betrieb),
-das Senden über MTL ist auf Hardware noch nicht bestätigt.
+das Senden und der Empfang laufen auf der Karte (erste Messung in `docs/MESSUNGEN.md`: keine Verluste, Sender mit
+Ratenbegrenzung „wide“; TSN-Pacing und `start-vrx` zu prüfen).
 
 ## Tech-Stack
 

@@ -809,6 +809,7 @@
     } else {
       spec.push(`format=L${f.audio.bitDepth}/${f.audio.sampleRate}/${f.audio.channels}`, `ptime=${f.audio.ptime}`);
     }
+    if (f.kind === 'video' && f.video.startVrx) spec.push(`start-vrx=${f.video.startVrx}`);
     spec.push(`pt=${f.payloadType}`);
     if (f.label) spec.push('name=' + f.label.replace(/,/g, ' '));
     return spec.join(',');
@@ -827,6 +828,7 @@
       out.resolution = f.resolution.value.trim();
       out.rate = f.rate.value;
       out.interlaced = f.interlaced.checked;
+      out.startVrx = f.startVrx.value;
     } else {
       out.sampleRate = +f.sampleRate.value;
       out.bitDepth = +f.bitDepth.value;
@@ -839,8 +841,10 @@
   function txFormSpec() {
     const v = txFormValues();
     const spec = [v.address];
-    if (v.kind === 'video') spec.push(`format=${v.resolution}${v.interlaced ? 'i' : 'p'}${v.rate}`);
-    else spec.push(`format=L${v.bitDepth}/${v.sampleRate}/${v.channels}`, `ptime=${v.ptime}`);
+    if (v.kind === 'video') {
+      spec.push(`format=${v.resolution}${v.interlaced ? 'i' : 'p'}${v.rate}`);
+      if (+v.startVrx > 0) spec.push(`start-vrx=${+v.startVrx}`);
+    } else spec.push(`format=L${v.bitDepth}/${v.sampleRate}/${v.channels}`, `ptime=${v.ptime}`);
     if (v.pt !== '') spec.push('pt=' + v.pt);
     if (v.name) spec.push('name=' + v.name);
     return { kind: v.kind, spec: spec.join(',') };
@@ -915,6 +919,7 @@
       e.resolution.value = `${f.video.width}x${f.video.height}`;
       e.rate.value = f.video.rate;
       e.interlaced.checked = f.video.interlaced;
+      e.startVrx.value = f.video.startVrx || 0;
     } else {
       e.sampleRate.value = f.audio.sampleRate;
       e.bitDepth.value = f.audio.bitDepth;

@@ -258,6 +258,7 @@ TEST_CASE("Testsender: JSON für die Oberfläche") {
     CHECK(v["video"]["interlaced"] == true);
     CHECK(v["video"]["rate"] == "50");
     CHECK(v["video"]["width"] == 1920);
+    CHECK(v["video"]["startVrx"] == 0);
     const auto& a = json["flows"][1];
     CHECK(a["kind"] == "audio");
     CHECK(a["audio"]["channels"] == 8);
