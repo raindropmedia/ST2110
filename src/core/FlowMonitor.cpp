@@ -281,9 +281,40 @@ void FlowMonitor::recordAudioPeriod(Path path, const AudioTiming& a) {
     p.lastVerdict = a.compliance;
 }
 
-void FlowMonitor::setCounters(const StreamCounters& c) {
+namespace {
+
+uint64_t minus(uint64_t a, uint64_t b) {
+    return a >= b ? a - b : 0; // MTL setzt Zähler nie zurück; zur Sicherheit nie negativ
+}
+
+// Zählerstand von MTL abzüglich des Stands beim letzten Zurücksetzen.
+StreamCounters since(const StreamCounters& a, const StreamCounters& b) {
+    StreamCounters d;
+    for (size_t i = 0; i < kPathCount; ++i) {
+        d.paths[i].packets = minus(a.paths[i].packets, b.paths[i].packets);
+        d.paths[i].bytes = minus(a.paths[i].bytes, b.paths[i].bytes);
+        d.paths[i].lost = minus(a.paths[i].lost, b.paths[i].lost);
+        d.paths[i].reordered = minus(a.paths[i].reordered, b.paths[i].reordered);
+        d.paths[i].duplicates = minus(a.paths[i].duplicates, b.paths[i].duplicates);
+        d.paths[i].errors = minus(a.paths[i].errors, b.paths[i].errors);
+    }
+    d.received = minus(a.received, b.received);
+    d.lost = minus(a.lost, b.lost);
+    d.unrecovered = minus(a.unrecovered, b.unrecovered);
+    d.redundant = minus(a.redundant, b.redundant);
+    d.wrongPayloadType = minus(a.wrongPayloadType, b.wrongPayloadType);
+    d.wrongSsrc = minus(a.wrongSsrc, b.wrongSsrc);
+    d.framesIncomplete = minus(a.framesIncomplete, b.framesIncomplete);
+    return d;
+}
+
+} // namespace
+
+void FlowMonitor::setCounters(const StreamCounters& raw) {
     std::lock_guard lock(mutex_);
     CounterState& s = counters_;
+    s.raw = raw;
+    const StreamCounters c = since(raw, s.baseline);
     const char* name = config_.video ? "Video" : "Ton";
     const double t = now();
     if (s.any) {
@@ -335,6 +366,12 @@ void FlowMonitor::reset() {
         }
     }
     framesTotal_ = FrameCounters{};
+    // Zähler von MTL laufen weiter: ab jetzt zählt nur, was nach dem Zurücksetzen dazukommt.
+    counters_.baseline = counters_.raw;
+    counters_.current = StreamCounters{};
+    counters_.lastInterval = StreamCounters{};
+    counters_.rateBase = StreamCounters{};
+    counters_.rateTime = now();
     if (videoAnalyzer_) {
         videoAnalyzer_->resetTotals();
     }

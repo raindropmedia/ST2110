@@ -216,6 +216,19 @@ TEST_CASE("Flow: Zähler melden Verluste, Zurücksetzen leert") {
     CHECK(interval["flows"]["v1"]["counters"]["paths"]["P"]["lost"] == 3);
     hub.reset();
     CHECK(hub.snapshot("v1")["events"].size() == 1);
+    // MTL zählt weiter: nach dem Zurücksetzen zählt nur der Zuwachs.
+    snap = hub.snapshot("v1");
+    CHECK(snap["flow"]["counters"]["paths"]["P"]["lost"] == 0);
+    CHECK(snap["flow"]["counters"]["unrecovered"] == 0);
+    CHECK(snap["flows"][0]["lost"] == 0);
+    c.paths[0].packets = 150;
+    c.paths[0].lost = 5;
+    video->setCounters(c);
+    snap = hub.snapshot("v1");
+    CHECK(snap["flow"]["counters"]["paths"]["P"]["lost"] == 2);
+    CHECK(snap["flow"]["counters"]["paths"]["P"]["packets"] == 50);
+    CHECK(snap["flow"]["counters"]["unrecovered"] == 0);
+    CHECK(snap["flows"][0]["lost"] == 2);
 }
 
 TEST_CASE("Hub: Snapshot ohne Auswahl zeigt den ersten Flow, unbekannte ID keinen") {

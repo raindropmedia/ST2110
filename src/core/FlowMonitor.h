@@ -118,7 +118,9 @@ class FlowMonitor {
         TimeSeries dpvrMaxUs, dpvrMinUs, tsdfUs, iptMaxNs;
     };
     struct CounterState {
-        StreamCounters current;
+        StreamCounters current;  // seit dem letzten Zurücksetzen (raw minus baseline)
+        StreamCounters raw;      // Zählerstand von MTL
+        StreamCounters baseline; // Zählerstand von MTL beim letzten Zurücksetzen
         StreamCounters lastInterval;
         StreamCounters rateBase;
         double rateTime = 0;
