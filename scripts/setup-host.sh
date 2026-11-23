@@ -74,6 +74,22 @@ bind)
 	done
 	modprobe vfio-pci
 	nicctl bind_pmd "$2"
+	# VFIO übernimmt nur ganze IOMMU-Gruppen. Hängen andere Geräte der Gruppe (oft der zweite Port der
+	# Karte, wenn der Steckplatz kein ACS kann) noch am Kernel-Treiber, scheitert DPDK mit "VFIO group is
+	# not viable".
+	for other in /sys/bus/pci/devices/"$2"/iommu_group/devices/*; do
+		[ -e "$other" ] || continue
+		bdf=$(basename "$other")
+		[ "$bdf" = "$2" ] && continue
+		drv=$(basename "$(readlink "$other/driver" 2>/dev/null)" 2>/dev/null)
+		case "$drv" in
+		vfio-pci | "") ;;
+		*)
+			echo "Achtung: $bdf ($drv) liegt in derselben IOMMU-Gruppe. DPDK braucht die ganze Gruppe:" >&2
+			echo "  sudo -E $0 bind $bdf   (oder Steckplatz mit eigener Gruppe wählen)" >&2
+			;;
+		esac
+	done
 	;;
 ddp)
 	# DPDK liest nur das unkomprimierte DDP-Paket; Ubuntu 26.04 liefert ice.pkg.zst.

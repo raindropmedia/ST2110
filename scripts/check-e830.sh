@@ -76,6 +76,11 @@ for dev in /sys/bus/pci/devices/*; do
 		warn "Gerät steht nicht in der Testliste von MTL (dort: 12d2, 12d3, 1592, 1593, 159b)"
 	fi
 	info "Treiber: $driver, NUMA-Knoten: $numa"
+	if [ -e "$dev/iommu_group" ]; then
+		group=$(basename "$(readlink "$dev/iommu_group")")
+		members=$(find "$dev/iommu_group/devices/" -mindepth 1 -maxdepth 1 -printf '%f ' 2>/dev/null)
+		info "IOMMU-Gruppe $group: $members(DPDK braucht alle Geräte der Gruppe an vfio-pci)"
+	fi
 
 	if [ -r "$dev/current_link_speed" ]; then
 		cur="$(cat "$dev/current_link_speed") x$(cat "$dev/current_link_width")"
