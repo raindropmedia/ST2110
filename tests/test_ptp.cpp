@@ -22,7 +22,7 @@ TEST_CASE("PTP-Zustand: kein Sync, synchronisiert, eingerastet, Zeitüberschreit
     CHECK(ptp.syncCount() == 10);
     auto json = ptp.toJson(t, 60.0, 100);
     CHECK(json["syncs"] == 10);
-    CHECK(json["histogram"]["count"] == 10);
+    CHECK(json["histogram"]["count"] == 9); // ohne den ersten Sync von 50 µs (Einschwingen)
     auto interval = ptp.takeInterval();
     CHECK(interval.count() == 10);
     CHECK(ptp.takeInterval().empty());
@@ -102,6 +102,39 @@ TEST_CASE("PTP: Zeitsprung beim ersten Sync geht nicht in die Statistik") {
     ptp.onSync(t += 0.125, -2000000, 37);
     CHECK(ptp.steps() == 2);
     CHECK(ptp.state(t) == PtpState::Syncing);
+}
+
+TEST_CASE("PTP: Gesamtwerte beginnen mit dem ersten Einrasten, der Verlauf zeigt das Einschwingen") {
+    PtpMonitor ptp;
+    double t = 0;
+    ptp.onSync(t += 0.125, 37000356475, 37);
+    // Einschwingen nach dem Sprung: −25 µs und +83 µs (so beobachtet), dann ruhig
+    for (int64_t d : {-25315, 83281, 4200, 2600, 3000}) {
+        ptp.onSync(t += 0.125, d, 37);
+        CHECK(ptp.settling());
+        CHECK(ptp.totalDelta().empty());
+    }
+    for (int i = 0; i < 8; ++i) {
+        ptp.onSync(t += 0.125, 1400 + i, 37);
+    }
+    CHECK(ptp.state(t) == PtpState::Locked);
+    CHECK_FALSE(ptp.settling());
+    CHECK(ptp.totalDelta().count() == 8);
+    CHECK(ptp.totalDelta().min() == 1400);
+    CHECK(ptp.totalDelta().max() == 1407);
+    CHECK(ptp.histogram().count() == 8);
+    // Verlauf und Intervall enthalten das Einschwingen (ohne den Sprung selbst)
+    CHECK(ptp.takeInterval().count() == 13);
+    // Danach zählt jeder Sync; ein Ausrasten ohne Sprung schwingt nicht neu ein
+    ptp.onSync(t += 0.125, 1405, 37);
+    CHECK(ptp.totalDelta().count() == 9);
+    ptp.onSync(t += 0.125, 5000, 37);
+    CHECK(ptp.state(t) == PtpState::Syncing);
+    CHECK_FALSE(ptp.settling());
+    CHECK(ptp.totalDelta().count() == 10);
+    // Ein neuer Zeitsprung beginnt das Einschwingen von vorn
+    ptp.onSync(t += 0.125, 2000000, 37);
+    CHECK(ptp.settling());
 }
 
 TEST_CASE("PTP-Zustand: nach einer Lücke wieder von vorn einrasten") {

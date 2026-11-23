@@ -29,6 +29,7 @@ void PtpMonitor::onSync(double nowSec, int64_t deltaNs, int16_t utcOffset) {
     if (syncs_ > 0 && nowSec - lastSyncSec_ > settings_.timeoutSec) {
         // Nach einer Lücke von neuem einrasten
         locked_ = false;
+        settling_ = true;
         recent_.clear();
     }
     ++syncs_;
@@ -40,6 +41,7 @@ void PtpMonitor::onSync(double nowSec, int64_t deltaNs, int16_t utcOffset) {
         ++steps_;
         lastStep_ = deltaNs;
         locked_ = false;
+        settling_ = true;
         recent_.clear(); // nach einem Zeitsprung von vorn einrasten
         return;
     }
@@ -63,9 +65,21 @@ void PtpMonitor::onSync(double nowSec, int64_t deltaNs, int16_t utcOffset) {
         locked_ = std::all_of(recent_.begin(), recent_.end(),
                               [&](int64_t d) { return deviation(d) < settings_.lockThresholdNs; });
     }
-    total_.add(static_cast<double>(deltaNs));
+    bool inTotals = !settling_;
+    if (settling_ && locked_) {
+        // Erstes Einrasten: Gesamtwerte beginnen mit den acht Syncs, die es belegen
+        settling_ = false;
+        total_ = Range{};
+        histogram_.clear();
+        for (const int64_t d : recent_) {
+            total_.add(static_cast<double>(d));
+            histogram_.add(static_cast<double>(d));
+        }
+    } else if (inTotals) {
+        total_.add(static_cast<double>(deltaNs));
+        histogram_.add(static_cast<double>(deltaNs));
+    }
     interval_.add(static_cast<double>(deltaNs));
-    histogram_.add(static_cast<double>(deltaNs));
     series_.add(nowSec, static_cast<double>(deltaNs));
 }
 
@@ -97,6 +111,7 @@ nlohmann::json PtpMonitor::toJson(double nowSec, double windowSec, size_t maxPoi
         {"lockThresholdNs", settings_.lockThresholdNs},
         {"unlockThresholdNs", settings_.unlockThresholdNs},
         {"driftNs", syncs_ > steps_ ? nlohmann::json(drift_) : nlohmann::json(nullptr)},
+        {"settling", settling_},
         {"steps", steps_},
         {"lastStepNs", steps_ ? nlohmann::json(lastStep_) : nlohmann::json(nullptr)},
         {"deltaNs", rangeToJson(total_)},

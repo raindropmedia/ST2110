@@ -29,7 +29,8 @@ bewusst angeben zu müssen.
   (`--tx-port`) muss beim Start feststehen.
 - Pacing: `--tx-pacing auto|rl|tsc|tsn` (MTL `pacing`); auf der E830 wählt MTL von selbst die Ratenbegrenzung, TSN
   (Launch-Time) nur auf Wunsch. Je Videosender lässt sich der Vorlauf `start-vrx` einstellen. Gemessen: Mit
-  Ratenbegrenzung ist der Sender „wide“ (VRX 15 statt höchstens 8), siehe `docs/MESSUNGEN.md`.
+  Ratenbegrenzung ist der Sender „wide“ (VRX 15 statt höchstens 8), mit `--tx-pacing tsn` „narrow“ (VRX 3,5,
+  Cinst 1); siehe `docs/MESSUNGEN.md`. Für eine Referenz im Messnetz also `--tx-pacing tsn` verwenden.
 - Das Testbild entsteht direkt im Transportformat (YCbCr 4:2:2, 10 Bit, RFC 4175; `TestPatternGenerator`),
   die Bänder einmal vorberechnet, je Bild nur Zeilen kopieren und das Quadrat zeichnen. MTL wandelt nichts.
   Der Sender ist ein „narrow“-Sender; unter E8xx taktet MTL per Rate-Limit statt TSN, am Empfänger

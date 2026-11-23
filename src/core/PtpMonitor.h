@@ -49,6 +49,7 @@ class PtpMonitor {
     int64_t lastDeltaNs() const { return lastDelta_; }
     // Mittlere Korrektur je Sync (Median der letzten Syncs): die Drift des Oszillators.
     double driftNs() const { return drift_; }
+    bool settling() const { return settling_; }
     uint64_t steps() const { return steps_; }
     int64_t lastStepNs() const { return lastStep_; }
     double lastSyncSec() const { return lastSyncSec_; }
@@ -69,6 +70,10 @@ class PtpMonitor {
     double lastSyncSec_ = 0;
     std::deque<int64_t> recent_;
     bool locked_ = false;
+    // Einschwingen: Nach dem Start und nach jedem Zeitsprung schwingt die Korrektur ein (gemessen: −25 µs bis
+    // +83 µs in den ersten Sekunden). Die Gesamtwerte (Min/Mittel/Max, Histogramm) beginnen deshalb mit dem
+    // ersten Einrasten danach; der Verlauf zeigt weiterhin alles.
+    bool settling_ = true;
     double drift_ = 0;
     uint64_t steps_ = 0;
     int64_t lastStep_ = 0;

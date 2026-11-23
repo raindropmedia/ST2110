@@ -598,7 +598,7 @@
         ['Zeitsprünge (≥ 1 ms)', p.steps ? `${fmt(p.steps, 0)} · zuletzt ${fmt(p.lastStepNs, 0)} ns` : 'keine']]),
       tile(p.state, 'Letzte Korrektur', p.lastDeltaNs !== null ? fmt(p.lastDeltaNs, 0) + ' ns' : '–', [
         ['Mittel der letzten Syncs (Drift je Sync)', p.driftNs !== null ? fmt(p.driftNs, 0) + ' ns' : '–'],
-        ['min / mittel / max', p.deltaNs ? rangeText(p.deltaNs, 1, 0) + ' ns' : '–']]),
+        [p.settling ? 'min / mittel / max (schwingt ein)' : 'min / mittel / max seit Einrasten', p.deltaNs ? rangeText(p.deltaNs, 1, 0) + ' ns' : '–']]),
       tile('', 'UTC-Versatz Grandmaster', p.utcOffset !== null ? p.utcOffset + ' s' : '–', [['Syncs', fmt(p.syncs, 0)]]),
     ].join('');
     Charts.series(charts.ptpSeries, [{ data: p.series, color: C('--accent'), label: 'Korrektur', use: 'max' }], {
