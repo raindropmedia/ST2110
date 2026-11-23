@@ -40,14 +40,19 @@ Kernel 7.0, MTL v26.09, DPDK 26.07, Switch MikroTik CRS309 ohne PTP-Funktion, Gr
   beim Start). Der Sender gibt zusätzlich rund 3,3 % Füllpakete ab (`pkts burst` 2 125 962 gegenüber 2 057 464
   Videopaketen; `DEV(1)` 2262 gegenüber `DEV(0)` 2190 Mbit/s); der Switch gibt sie nicht weiter. CPU: Scheduler-Kern
   `avg loop` 381 ns bei 7 Tasklets, Video-Empfang „cpu busy“ 2,7 %.
-- **Video-Timing mit anderem Pacing: Sender „narrow“ (2026-11-23, 17:3x, 1920x1080p50; Pacing vermutlich TSN über
-  `--tx-pacing tsn`, im MTL-Log `tx pacing tsn` bei `mt_dev_create(1)` zu bestätigen):** Urteil von MTL **narrow**.
+- **Video-Timing mit anderem Pacing: Sender „narrow“ (2026-11-23, 17:3x, 1920x1080p50; Pacing TSN über
+  `--tx-pacing tsn`, bestätigt im MTL-Log: `mt_dev_create(1), feature 0xf6, tx pacing tsn` und `pacing way: tsn`):** Urteil von MTL **narrow**.
   IPT (n = 5,58 Mio.) p50 4,66 µs, p99 5,03 µs, max 14,2 µs, ein schmaler Gipfel bei TRS (4,67 µs); Cinst max 1 Paket
   (Grenze 4); VRX p50 3,5, max 4 Pakete (Grenze 8); FPT 751,6 µs (TR_OFFSET 764 µs); Latenz 7,2 µs; RTP-Offset 67 Ticks
   (Grenze 70); keine Verluste, keine beschädigten Bilder (3157 Bilder). Paketprofil: konstant rund 17 µs (≈ 3,6
   Pakete) vor Soll, ohne Sägezahn und ohne schnellen Abschnitt am Bildanfang; das passt zum geplanten Vorlauf von
   4 Paketen (`narrow − (bulk − 1)`, MTL). Ratenbegrenzung gegen TSN auf derselben Karte, gleiche Strecke:
-  VRX max 16 gegen 4, Cinst max 12 gegen 1. Die negativen VRX-Werte um −30 aus dem Lauf mit Ratenbegrenzung kamen nicht
+  VRX max 16 gegen 4, Cinst max 12 gegen 1.
+  Die Zahlen gehen auf (MTL-Log `tv_init_pacing`: TRS 4665,9 ns, TR_OFFSET 764 444 ns, Vorlauf `vrx 5`): Der Sender
+  startet 5 Paketzeiten (23,3 µs) vor TR_OFFSET, der RTP-Zeitstempel trägt diesen Sendezeitpunkt (764,4 − 23,3 =
+  741,1 µs ≈ 66,7 Ticks, gemessen RTP-Offset 67). Latenz = FPT − RTP-Zeit = 7,2 µs ist die Laufzeit Sender → Empfänger.
+  Erwartetes VRX = Vorlauf − Laufzeit/TRS = 5 − 7,2/4,666 = 3,46 Pakete, gemessen p50 3,5; erwarteter Vorsprung
+  23,3 − 7,2 = 16,1 µs, gemessen rund 17 µs. Die negativen VRX-Werte um −30 aus dem Lauf mit Ratenbegrenzung kamen nicht
   wieder.
 - **Video-Timing des Testsenders am Empfänger (2026-11-23, 17:20, Oberfläche, 1920x1080p50, Pacing: Ratenbegrenzung):**
   Urteil von MTL **wide**, nicht narrow. IPT (n = 17,0 Mio.) p50 4,14 µs, p99 6,33 µs, max 16,9 µs bei TRS rund 4,7 µs

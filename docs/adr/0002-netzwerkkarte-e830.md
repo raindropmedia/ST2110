@@ -36,5 +36,5 @@ Uhr von Port 0 nutzt.
 - Aktuelle NVM-Firmware, `ice`-Treiber mit MTL-Patches und DPDK nach `versions.env` der MTL-Version.
 - SFP28-Module bzw. DAC-Kabel nach Intel-Kompatibilitätsliste.
 - Nachtrag 2026-11-20: Geliefert wurde eine E830-XXVDA2 mit E830-L-Controller (`12de`). DPDK 26.07 führt
-  `12de` als E830 (gleicher MAC-Typ); ob TSN-Pacing und der genaue Uhrenabgleich darauf gehen, ist offen.
+  `12de` als E830 (gleicher MAC-Typ); TSN-Pacing geht auf der E830-L (2026-11-23, Sender „narrow“, siehe `docs/MESSUNGEN.md`); der genaue Uhrenabgleich ist offen.
 - Ein PTP-fähiger Switch (Boundary- oder Transparent-Clock) und ein Grandmaster im Messnetz.

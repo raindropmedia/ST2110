@@ -105,7 +105,10 @@ Ohne Sender lässt sich die Kette mit dem Beispielprogramm von MTL auf Port 1 pr
   Join wie von MTL (IGMPv3, ohne Router Alert, `scripts/igmp-probe.py`) wird angenommen; Router Alert ist nicht die
   Ursache. Unter MTL kam trotzdem kein PTP an (`PTP(0): not connected`, 40 s beobachtet). Verdacht: MTL sendet
   den Join direkt nach dem Link-Aufbau, solange der Switch-Port per RSTP noch nicht weiterleitet.
-- [ ] E830-L: TSN-Pacing beim Senden und `PTP_SYS_OFFSET_PRECISE` auf der Karte prüfen (MTL testet `12de` nicht)
+- [x] E830-L: TSN-Pacing beim Senden geht (2026-11-23, DPDK 26.07, ice 7.0 / Firmware 1.3833): `--tx-pacing tsn`,
+  MTL-Feature 0xf6 (Launch-Time erkannt), Sender „narrow“ (`docs/MESSUNGEN.md`)
+- [ ] E830-L: `PTP_SYS_OFFSET_PRECISE` (genauer Abgleich Kartenuhr / Systemuhr) auf der Karte prüfen; den Haswell-Rechner
+  hat kein ART, dort ist es nicht zu erwarten
 - [ ] Firmware-, Treiber- und DPDK-Version notiert (`docs/MESSUNGEN.md`)
 - [ ] Erste Messung gegen bekannten Sender, Abgleich mit EBU LIST
 - [ ] Rechte: Betrieb ohne root (MTL kann das laut Doku, Einrichtung offen)
