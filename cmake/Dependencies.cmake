@@ -15,6 +15,10 @@ FetchContent_Declare(
     GIT_SHALLOW TRUE
 )
 set(JSON_BuildTests OFF CACHE INTERNAL "")
+# Abhängigkeiten nur zum Bauen: "cmake --install" installiert nur st2110-monitor und die Oberfläche.
+set(JSON_Install OFF CACHE INTERNAL "")
+set(HTTPLIB_INSTALL OFF CACHE INTERNAL "")
+set(DOCTEST_NO_INSTALL ON CACHE INTERNAL "")
 # Web-Oberfläche nur über HTTP im Messnetz; keine Kompression, kein TLS.
 set(HTTPLIB_USE_OPENSSL_IF_AVAILABLE OFF CACHE INTERNAL "")
 set(HTTPLIB_USE_ZLIB_IF_AVAILABLE OFF CACHE INTERNAL "")
