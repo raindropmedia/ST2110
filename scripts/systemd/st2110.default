@@ -1,0 +1,12 @@
+# Einstellungen des Dienstes st2110-monitor (wird nach /etc/default/st2110 installiert).
+# Werte ohne Leerzeichen-Probleme: Anführungszeichen nur um die ganze Zeile.
+
+# PCI-Adressen der Ports, die vor dem Start an vfio-pci gebunden werden (nie den Verwaltungsport!)
+ST2110_BIND_PORTS="0000:01:00.0 0000:01:00.1"
+# 2-MB-Hugepages (2048 = 4 GiB)
+ST2110_HUGEPAGES=2048
+# Ort des MTL-Quellordners (für nicctl.sh)
+MTL_SRC=/opt/Media-Transport-Library
+
+# Optionen von st2110-monitor. Die Web-Oberfläche hat keine Anmeldung: nur an die Verwaltungsadresse binden.
+ST2110_ARGS="--port 0000:01:00.0 --local-ip 192.168.211.100 --tx-port 0000:01:00.1 --tx-local-ip 192.168.211.101 --lcores 2,3,4,5 --tx-pacing tsn --http 192.168.211.245:8090 --webui /opt/st2110/webui --output -"

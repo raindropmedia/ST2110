@@ -1,0 +1,16 @@
+[Unit]
+Description=ST2110-Messplatz: Hugepages anlegen, Ports an vfio-pci binden
+Documentation=file:///opt/st2110/docs/hardware/e830-xxvda2.md
+After=network-online.target
+Wants=network-online.target
+Before=st2110-monitor.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/default/st2110
+ExecStart=/opt/st2110/scripts/systemd/service-host.sh start
+ExecStop=/opt/st2110/scripts/systemd/service-host.sh stop
+
+[Install]
+WantedBy=multi-user.target

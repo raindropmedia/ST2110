@@ -116,6 +116,23 @@ sudo st2110-monitor --port 0000:01:00.0 --local-ip 192.168.211.100 \
      --audio 239.211.0.2:30000,format=L24/48000/2,name=Testton --http 0.0.0.0:8090
 ```
 
+## Als Dienst betreiben (systemd)
+
+Nach dem Bauen (`cmake --preset release && cmake --build --preset release`):
+
+```bash
+sudo scripts/install-service.sh            # Programm nach /usr/local/bin, Skripte und Oberfläche nach /opt/st2110, Units
+sudoedit /etc/default/st2110               # PCI-Adressen, IPs, Optionen (ST2110_ARGS)
+sudo systemctl enable --now st2110-host st2110-monitor
+journalctl -u st2110-monitor -f
+```
+
+`st2110-host.service` legt die Hugepages an und bindet die Ports aus `ST2110_BIND_PORTS` an `vfio-pci` (beim
+Beenden gibt es sie zurück); `st2110-monitor.service` hängt daran, startet bei Fehlern neu und beendet MTL
+sauber (SIGINT). `scripts/install-service.sh --remove` entfernt den Dienst, `/etc/default/st2110` bleibt.
+Die Web-Oberfläche hat keine Anmeldung: `--http` an die Verwaltungsadresse binden, nicht an `0.0.0.0`; der
+Verwaltungsport darf nie in `ST2110_BIND_PORTS` stehen.
+
 **Erkennung:** Im DPDK-Betrieb liest das Programm von selbst auf dem **Verwaltungsport** (Schnittstelle mit der
 Standardroute) alle UDP/RTP-Flows mit und empfängt SAP; `--no-discover` schaltet das ab. Mit IGMP-Snooping im
 Switch sieht der Verwaltungsport nur SAP und selbst abonnierte Gruppen, für eine vollständige Sicht braucht es

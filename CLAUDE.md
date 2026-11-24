@@ -64,7 +64,7 @@ horizontales Scrollen.
 | `webui/` | Oberfläche (`index.html`, `style.css`, `charts.js`, `app.js`) |
 | `tests/` | doctest-Tests für `src/core/` |
 | `patches/mtl/` | eigene Patches für MTL je Version |
-| `scripts/` | `install-mtl.sh`, `check-e830.sh`, `setup-host.sh` |
+| `scripts/` | `install-mtl.sh`, `check-e830.sh`, `setup-host.sh`, `install-service.sh`, `systemd/` (Units, `/etc/default/st2110`-Vorlage) |
 | `docs/` | ADRs, Inbetriebnahme, Messungen, Bilder der Oberfläche |
 | `config/local/` | lokale Daten, SDP-Dateien und Messergebnisse (nicht eingecheckt) |
 

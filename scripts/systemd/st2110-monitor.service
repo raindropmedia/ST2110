@@ -1,0 +1,20 @@
+[Unit]
+Description=ST2110-Messplatz (st2110-monitor)
+Documentation=file:///opt/st2110/README.md
+After=st2110-host.service
+Requires=st2110-host.service
+
+[Service]
+EnvironmentFile=/etc/default/st2110
+# ST2110_ARGS enthält alle Optionen (siehe /etc/default/st2110); ohne Anführungszeichen, damit systemd trennt.
+ExecStart=/usr/local/bin/st2110-monitor $ST2110_ARGS
+Restart=on-failure
+RestartSec=5
+# MTL/DPDK sperrt Hugepages und braucht Echtzeitnähe
+LimitMEMLOCK=infinity
+LimitNOFILE=65536
+TimeoutStopSec=30
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target
