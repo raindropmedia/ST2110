@@ -238,3 +238,45 @@ TEST_CASE("Hub: Snapshot ohne Auswahl zeigt den ersten Flow, unbekannte ID keine
     CHECK(hub.snapshot("")["flow"]["id"] == "a1");
     CHECK(hub.snapshot("x9")["flow"].is_null());
 }
+
+TEST_CASE("ST 2110-10: Systemprüfung aus Demo-Video") {
+    MonitorHub hub(demoHub());
+    std::string error;
+    hub.addFlow(videoFlow(false), error);
+    auto video = hub.flows().front();
+    StreamCounters counters;
+    counters.paths[0].packets = 1000;
+    video->setCounters(counters);
+    auto snap = hub.snapshot("v1");
+    REQUIRE(snap["flow"].contains("system10"));
+    const auto& s10 = snap["flow"]["system10"];
+    CHECK(s10["checks"].size() >= 5);
+    bool loss = false;
+    for (const auto& c : s10["checks"]) {
+        if (c["id"] == "loss") {
+            loss = true;
+            CHECK(c["verdict"] == "ok");
+        }
+    }
+    CHECK(loss);
+}
+
+TEST_CASE("ST 2110-10: Verluste und fremde SSRC lassen die Prüfung fehlschlagen") {
+    MonitorHub hub(demoHub());
+    std::string error;
+    hub.addFlow(videoFlow(false), error);
+    auto video = hub.flows().front();
+    StreamCounters c;
+    c.paths[0].packets = 100;
+    video->setCounters(c);
+    c.paths[0].lost = 2;
+    c.wrongSsrc = 5;
+    video->setCounters(c);
+    const auto s10 = hub.snapshot("v1")["flow"]["system10"];
+    CHECK(s10["verdict"] == "fail");
+    int failed = 0;
+    for (const auto& check : s10["checks"]) {
+        failed += check["verdict"] == "fail" ? 1 : 0;
+    }
+    CHECK(failed >= 2);
+}

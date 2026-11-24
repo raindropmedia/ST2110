@@ -43,6 +43,7 @@
       <button data-tab="txgen">Testsender</button>
       <button data-tab="overview">Übersicht</button>
       <button data-tab="preview">Vorschau</button>
+      <button data-tab="system10">Zeitbezug ST 2110-10</button>
       <button data-tab="video">Video ST 2110-21</button>
       <button data-tab="profile">Paketprofil</button>
       <button data-tab="audio">Ton ST 2110-30</button>
@@ -192,6 +193,16 @@
           <figure class="card"><figcaption id="ovCap2">–</figcaption><canvas data-chart="ov2"></canvas></figure>
           <figure class="card"><figcaption id="ovCap3">–</figcaption><canvas data-chart="ov3"></canvas></figure>
           <figure class="card"><figcaption>PTP-Korrektur je Sync (ns)</figcaption><canvas data-chart="ovPtp"></canvas></figure>
+        </div>
+      </section>
+
+      <!-- ST 2110-10 -->
+      <section data-view="system10" class="view">
+        <div class="card">
+          <div class="card-head"><h3>Systemprüfung ST 2110-10 <span class="hint" id="s10Info"></span></h3></div>
+          <div class="table-scroll"><table class="flows" id="s10Table"></table></div>
+          <p class="hint">Zusammenfassung aus PTP, RTP-Zeitstempeln, Paketzählern und Payload-Typ. Grenzen für Video stammen
+            von MTL (<code>st20_rx_tp_pass</code>); ST 2110-10 selbst nennt keine Grenzwerte für den Verkehr.</p>
         </div>
       </section>
 

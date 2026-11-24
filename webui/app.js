@@ -225,6 +225,7 @@
       case 'txgen': renderTx(); break;
       case 'system': renderSystem(); break;
       case 'overview': renderOverview(s); break;
+      case 'system10': renderSystem10(s); break;
       case 'preview': renderPreviewCards(s); break;
       case 'video': renderVideo(s); break;
       case 'profile': renderProfile(s); break;
@@ -711,7 +712,7 @@
     const kind = s.flow ? s.flow.kind : null;
     const allowed = {
       flows: true, txgen: true, system: true, ptp: true, events: true,
-      overview: !!kind, counters: !!kind, redundancy: !!kind, preview: !!kind,
+      system10: !!kind, overview: !!kind, counters: !!kind, redundancy: !!kind, preview: !!kind,
       video: kind === 'video', profile: kind === 'video', audio: kind === 'audio',
     };
     document.querySelectorAll('#tabs button[data-tab]').forEach(b => {
@@ -950,6 +951,20 @@
       txMessage('Fehler: ' + err.message, true);
       return null;
     }
+  }
+
+  // ---------- ST 2110-10 ----------
+  const s10Label = { ok: 'ok', warn: 'Warnung', fail: 'Fehler', na: 'n. a.' };
+  const s10Dot = { ok: 'narrow', warn: 'wide', fail: 'failed', na: '' };
+
+  function renderSystem10(s) {
+    const r = s.flow && s.flow.system10;
+    if (!r) { $('s10Table').innerHTML = ''; return; }
+    $('s10Info').textContent = `${s.flow.label} · Gesamturteil: ${s10Label[r.verdict] || r.verdict}`;
+    $('s10Table').innerHTML = '<tr><th></th><th>Prüfung</th><th>Messwert</th><th>Grenze / Soll</th><th>Hinweis</th></tr>' +
+      r.checks.map(c => `<tr><td><span class="dot ${s10Dot[c.verdict] || ''}" title="${esc(s10Label[c.verdict] || '')}"></span></td>
+        <td>${esc(c.label)}</td><td class="mono">${esc(c.value)}</td><td class="mono">${esc(c.limit)}</td>
+        <td class="wrap note">${esc(c.note || "")}</td></tr>`).join('');
   }
 
   // ---------- System ----------

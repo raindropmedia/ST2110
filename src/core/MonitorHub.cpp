@@ -1,6 +1,7 @@
 #include "core/MonitorHub.h"
 
 #include "core/Report.h"
+#include "core/System10.h"
 
 #include <algorithm>
 #include <arpa/inet.h>
@@ -318,12 +319,16 @@ json MonitorHub::snapshot(const std::string& flowId, double windowSec) {
     std::lock_guard lock(mutex_);
     const double t = now();
     checkPtpLocked(t);
+    const json ptp = ptpJson(windowSec);
+    if (detail.is_object()) {
+        detail["system10"] = buildSystem10(detail, ptp, config_.ptp, config_.hwTimestamp);
+    }
     return json{{"time", isoTimestamp(std::chrono::system_clock::now())},
                 {"uptimeSec", t},
                 {"demo", config_.demo},
                 {"hwTimestamp", config_.hwTimestamp},
                 {"ptpEnabled", config_.ptp},
-                {"ptp", ptpJson(windowSec)},
+                {"ptp", ptp},
                 {"flows", summaries},
                 {"flow", detail},
                 {"events", eventsJsonLocked(200)}};

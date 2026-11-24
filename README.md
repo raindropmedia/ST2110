@@ -133,6 +133,11 @@ sauber (SIGINT). `scripts/install-service.sh --remove` entfernt den Dienst, `/et
 Die Web-Oberfläche hat keine Anmeldung: `--http` an die Verwaltungsadresse binden, nicht an `0.0.0.0`; der
 Verwaltungsport darf nie in `ST2110_BIND_PORTS` stehen.
 
+**Tab „Zeitbezug ST 2110-10“:** Systemprüfung für jeden Flow aus vorhandenen Messwerten: PTP, RTP-Zeitstempel gegen PTP-Zeit
+(Latenz, bei Ton DPVR), Zeitstempelschritt und RTP-Offset (Grenzen von MTL), Paketverlust, vertauschte und doppelte
+Pakete, falscher Payload-Typ oder SSRC, Payload-Typ im dynamischen Bereich, Hardware-Zeitstempel. Ein eigenes
+ST-2110-10-Gerüst gibt es in MTL nicht; ST 2110-10 nennt keine Grenzwerte für den Verkehr.
+
 **Tab „System“:** zeigt den Messrechner (Kernel, CPU, Hugepages, IOMMU, Kernel-Parameter) und alle Intel-Netzwerkkarten
 mit PCI-Adresse, Treiber und Firmware, PCIe-Anbindung (Warnung bei weniger Lanes als möglich), Link, MAC sowie dem
 **SFP-Modul** (Hersteller, Teilenummer, Seriennummer, Datum, Wellenlänge, Leitungslänge, Temperatur, Sende- und

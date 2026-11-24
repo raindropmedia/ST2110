@@ -33,6 +33,7 @@ add_library(st2110_core STATIC
     src/core/Sdp.cpp
     src/core/SyntheticSender.cpp
     src/core/SystemInfo.cpp
+    src/core/System10.cpp
     src/core/TestSender.cpp
     src/core/TestSignal.cpp
     src/core/TimeSeries.cpp

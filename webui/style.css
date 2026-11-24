@@ -161,6 +161,7 @@ table.flows .dot.failed, table.flows .dot.error { background: var(--failed); }
 .txstate.error { color: var(--failed); }
 .txstate.stopped { color: var(--muted); }
 table.flows td.wrap { white-space: normal; max-width: 360px; color: #fecaca; }
+table.flows td.wrap.note { color: var(--muted); }
 .hint.warn { color: var(--wide); }
 .msg {  margin-top: 10px; padding: 7px 10px; border-radius: 6px; background: #0f2a1a; color: #86efac; white-space: pre-line; }
 .msg.error { background: #2a0f0f; color: #fecaca; }
