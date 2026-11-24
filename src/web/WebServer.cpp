@@ -339,6 +339,20 @@ bool WebServer::start(const std::string& host, uint16_t port, std::string& error
             req.matches[2] == "start" ? testSender_->start(id, error) : testSender_->stop(id, error);
         txReply(res, ok, error);
     });
+    s.Get(R"(/api/tx/([A-Za-z0-9_-]+)/sdp)", [this](const httplib::Request& req, httplib::Response& res) {
+        if (testSender_ == nullptr) {
+            sendJson(res, json{{"error", "Kein Sendeport konfiguriert (--tx-port, --tx-local-ip)"}}, 409);
+            return;
+        }
+        std::string error;
+        const std::string sdp = testSender_->sdp(req.matches[1], error);
+        if (sdp.empty()) {
+            sendJson(res, json{{"error", error}}, 404);
+            return;
+        }
+        res.set_content(sdp, "application/sdp");
+        res.set_header("Content-Disposition", "inline; filename=\"" + std::string(req.matches[1]) + ".sdp\"");
+    });
     s.Delete(
         R"(/api/tx/([A-Za-z0-9_-]+))", [this, txReply](const httplib::Request& req, httplib::Response& res) {
             if (testSender_ == nullptr) {

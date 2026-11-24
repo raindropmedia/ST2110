@@ -40,6 +40,7 @@ namespace st2110 {
 //   PUT    /api/tx/<id>                  Einstellungen ändern ({"spec": "…"}), nur im Zustand stopped/error
 //   POST   /api/tx/<id>/start            senden (der Start läuft im Hintergrund: MTL wartet auf PTP)
 //   POST   /api/tx/<id>/stop             Senden beenden
+//   GET    /api/tx/<id>/sdp              SDP-Beschreibung des Testsenders (application/sdp)
 //   DELETE /api/tx/<id>                  Testsender löschen
 //   GET    /api/system                   Host (Kernel, CPU, Hugepages, IOMMU) und Netzwerkkarten: PCI,
 //   Treiber,

@@ -63,6 +63,10 @@ class TestSender {
     // Löscht einen Eintrag (ein sendender wird vorher gestoppt); nicht während Starting oder Stopping.
     bool remove(const std::string& id, std::string& error);
 
+    // SDP-Beschreibung des Senders (Quelladresse = localIp); leer mit Fehlermeldung, wenn es die ID nicht
+    // gibt.
+    std::string sdp(const std::string& id, std::string& error) const;
+
     std::vector<TxEntryInfo> list() const;
     nlohmann::json toJson() const;
 

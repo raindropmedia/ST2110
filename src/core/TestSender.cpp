@@ -1,6 +1,7 @@
 #include "core/TestSender.h"
 
 #include "core/FrameRate.h"
+#include "core/SdpWriter.h"
 
 #include <algorithm>
 
@@ -252,6 +253,16 @@ bool TestSender::remove(const std::string& id, std::string& error) {
         starter.join();
     }
     return true;
+}
+
+std::string TestSender::sdp(const std::string& id, std::string& error) const {
+    std::lock_guard lock(mutex_);
+    auto entry = find(id);
+    if (!entry) {
+        error = "Testsender " + id + " nicht gefunden.";
+        return {};
+    }
+    return flowToSdp(entry->flow, localIp_);
 }
 
 std::vector<TxEntryInfo> TestSender::list() const {

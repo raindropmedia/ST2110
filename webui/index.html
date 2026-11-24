@@ -196,6 +196,15 @@
           </form>
           <div class="hint" id="txEstimate"></div>
           <div class="msg" id="txMsg" hidden></div>
+          <div class="card" id="txSdpCard" hidden>
+            <div class="card-head"><h3>SDP <span class="hint" id="txSdpName"></span></h3>
+              <span><button id="txSdpCopy" type="button" class="btn small">Kopieren</button>
+                <button id="txSdpDownload" type="button" class="btn small">Herunterladen</button>
+                <button id="txSdpClose" type="button" class="btn small">Schließen</button></span></div>
+            <textarea id="txSdpText" rows="14" readonly spellcheck="false"></textarea>
+            <p class="hint">Die Zeitbasis steht als „traceable“, weil MTL die Grandmaster-Kennung nicht liefert; für Empfänger, die eine
+              Kennung verlangen, <code>a=ts-refclk</code> anpassen. Quellfilter: Adresse des Sendeports.</p>
+          </div>
           <datalist id="txResolutions">
             <option value="1280x720"><option value="1920x1080"><option value="2560x1440"><option value="3840x2160">
           </datalist>

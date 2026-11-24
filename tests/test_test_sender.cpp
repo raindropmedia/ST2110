@@ -313,3 +313,46 @@ TEST_CASE("Testsender: Pixelformate und Packmodus, 4:2:0 nur progressiv") {
     CHECK(sender.add(videoFlow("239.211.0.8:20000,format=1920x1080p50,sampling=YCbCr-4:2:0,depth=8"), false,
                      id2, error));
 }
+
+#include "core/SdpWriter.h"
+
+TEST_CASE("SDP des Testsenders: Rückweg über flowsFromSdp für Video, Ton, ANC und ST 2022-6") {
+    FakeBackend backend;
+    TestSender sender(backend, 4, "0000:01:00.1", "192.168.211.101");
+    std::string id, error;
+    REQUIRE(sender.add(
+        videoFlow("239.211.0.1:20000,format=1920x1080i50,sampling=YCbCr-4:2:2,depth=12,packing=GPM,pt=112"),
+        false, id, error));
+    const std::string sdp = sender.sdp(id, error);
+    CHECK(
+        sdp.find("a=fmtp:112 sampling=YCbCr-4:2:2; width=1920; height=1080; exactframerate=25; depth=12;") !=
+        std::string::npos);
+    CHECK(sdp.find("PM=2110GPM") != std::string::npos);
+    CHECK(sdp.find("interlace") != std::string::npos);
+    CHECK(sdp.find("a=source-filter: incl IN IP4 239.211.0.1 192.168.211.101") != std::string::npos);
+    std::vector<std::string> errors;
+    auto back = flowsFromSdp(sdp, errors);
+    REQUIRE(back.size() == 1);
+    CHECK(errors.empty());
+    REQUIRE(back[0].video);
+    CHECK(back[0].video->format.name() == "1920x1080i50 YCbCr-4:2:2 12 Bit");
+    CHECK(back[0].video->packing == Packing::Gpm);
+    CHECK(back[0].video->payloadType == 112);
+
+    FlowConfig audio;
+    REQUIRE(parseFlowSpec(Media::Audio, "239.211.1.1:30000,format=L24/48000/8,ptime=0.125", audio, error));
+    const std::string asdp = flowToSdp(audio, "192.168.211.101");
+    CHECK(asdp.find("channel-order=SMPTE2110.(U08)") != std::string::npos);
+    CHECK(asdp.find("a=ptime:0.125") != std::string::npos);
+    auto audioBack = flowsFromSdp(asdp, errors);
+    REQUIRE(audioBack.size() == 1);
+    CHECK(audioBack[0].audio->format.channels == 8);
+
+    FlowConfig anc;
+    REQUIRE(parseFlowSpec(Media::Anc, "239.211.2.1:40000,pt=100", anc, error));
+    CHECK(flowsFromSdp(flowToSdp(anc, ""), errors).at(0).anc.has_value());
+    FlowConfig sdi;
+    REQUIRE(parseFlowSpec(Media::Hbrmt, "239.211.3.1:5004,pt=98", sdi, error));
+    CHECK(flowsFromSdp(flowToSdp(sdi, ""), errors).at(0).hbrmt.has_value());
+    CHECK(sender.sdp("t99", error).empty());
+}

@@ -169,6 +169,10 @@ stammen aus der Momentaufnahme, die `scripts/setup-host.sh bind` vor dem Binden 
 ablegt (auch einzeln mit `setup-host.sh snapshot <pci>`); Diagnosewerte sind dann nicht live. Wer die Live-Werte
 braucht, gibt den Port kurz mit `setup-host.sh unbind` zurück.
 
+**SDP des Testsenders:** Im Tab „Testsender“ zeigt die Schaltfläche „SDP“ die Beschreibung des Senders (Kopieren, Herunterladen); per
+API `GET /api/tx/<id>/sdp`. Sie enthält Pixelformat, Packmodus, Rate und Zeilensprung, Kanäle und Paketzeit bei Ton, die ANC-Datenarten bzw.
+ST 2022-6 sowie `ts-refclk` als „traceable“ (MTL liefert keine Grandmaster-Kennung).
+
 **Testsender für ANC und ST 2022-6:** `--tx-anc <ip:port[,format=1920x1080p25,pt=100]>` sendet in jedem Bild vier ANC-Pakete
 (Payload-ID, Zeitcode ATC, AFD, CEA-708) über `st40_tx`; die Nutzdatenwörter sind Platzhalter, DID, SDID, Zeilen und Zeitbezug
 stimmen. `--tx-hbrmt <ip:port[,pt=98]>` sendet SD-SDI (625 Zeilen, 25 Hz, 4:2:2 10 Bit, 982 Datagramme je Bild zu 1376 Byte,
@@ -217,6 +221,7 @@ Programm als **reiner Netz-Scanner**, auch ohne MTL: `sudo st2110-monitor --disc
 | `POST /api/tx` | Testsender anlegen: `{"kind":"audio","spec":"239.211.1.1:30000,format=L24/48000/8,ptime=125us","start":true}` (spec wie `--tx-video`/`--tx-audio`) |
 | `PUT /api/tx/<id>` | Einstellungen ändern (`{"spec":"…"}`), nur im Zustand `stopped` oder `error` |
 | `POST /api/tx/<id>/start`, `POST /api/tx/<id>/stop` | Senden starten (im Hintergrund, MTL wartet auf PTP) bzw. beenden |
+| `GET /api/tx/<id>/sdp` | SDP-Beschreibung des Testsenders (`application/sdp`; Quellfilter = Adresse des Sendeports) |
 | `DELETE /api/tx/<id>` | Testsender löschen |
 | `GET /api/system` | Host (Kernel, CPU, Hugepages, IOMMU) und Netzwerkkarten: PCI, Treiber, Link, ethtool-Angaben, SFP-Modul (Hersteller, Teilenummer, Seriennummer, Diagnosewerte, Alarme); nur lesend, 5 s zwischengespeichert |
 | `POST /api/reset` | Messwerte zurücksetzen |

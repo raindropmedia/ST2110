@@ -33,6 +33,7 @@ add_library(st2110_core STATIC
     src/core/PtpMonitor.cpp
     src/core/Report.cpp
     src/core/SapDirectory.cpp
+    src/core/SdpWriter.cpp
     src/core/Sdp.cpp
     src/core/SyntheticSender.cpp
     src/core/SystemInfo.cpp

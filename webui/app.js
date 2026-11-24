@@ -1269,6 +1269,7 @@
             ${running ? `<button class="btn small" data-tx="stop" data-id="${esc(f.id)}" ${f.state === 'stopping' ? 'disabled' : ''}>Stoppen</button>`
                       : `<button class="btn small primary" data-tx="start" data-id="${esc(f.id)}" ${busy ? 'disabled' : ''}>Starten</button>`}
             <button class="btn small" data-tx="edit" data-id="${esc(f.id)}" ${f.state === 'stopped' || f.state === 'error' ? '' : 'disabled title="Nur im gestoppten Zustand"'}>Ändern</button>
+            <button class="btn small" data-tx="sdp" data-id="${esc(f.id)}" title="SDP-Beschreibung anzeigen">SDP</button>
             <button class="btn small" data-tx="monitor" data-id="${esc(f.id)}" title="Den Strom über den Empfangsport überwachen">Überwachen</button>
             <button class="btn small danger" data-tx="remove" data-id="${esc(f.id)}" ${busy ? 'disabled' : ''}>Löschen</button></td></tr>
           ${f.message ? `<tr><td></td><td colspan="7" class="wrap">${esc(f.message)}</td></tr>` : ''}`;
@@ -1291,6 +1292,19 @@
         await txRequest('DELETE', `api/tx/${id}`);
         break;
       case 'edit': txEdit(id); break;
+      case 'sdp': {
+        try {
+          const res = await fetch(`api/tx/${encodeURIComponent(id)}/sdp`, { cache: 'no-store' });
+          if (!res.ok) { txMessage((await res.json()).error || `Fehler ${res.status}`, true); break; }
+          const f = (state.tx.flows || []).find(x => x.id === id);
+          $('txSdpName').textContent = f ? `${f.label} · ${f.ip}:${f.udpPort}` : id;
+          $('txSdpText').value = (await res.text()).replace(/\r\n/g, '\n');
+          $('txSdpCard').dataset.id = id;
+          $('txSdpCard').hidden = false;
+          $('txSdpCard').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        } catch (err) { txMessage('Fehler: ' + err.message, true); }
+        break;
+      }
       case 'monitor': {
         const f = (state.tx.flows || []).find(x => x.id === id);
         if (!f) break;
@@ -1300,6 +1314,21 @@
         break;
       }
     }
+  });
+
+  $('txSdpClose').addEventListener('click', () => { $('txSdpCard').hidden = true; });
+  $('txSdpCopy').addEventListener('click', async () => {
+    const text = $('txSdpText');
+    try { await navigator.clipboard.writeText(text.value); txMessage('SDP in die Zwischenablage kopiert.'); }
+    catch (_) { text.select(); document.execCommand('copy'); txMessage('SDP kopiert.'); }
+  });
+  $('txSdpDownload').addEventListener('click', () => {
+    const blob = new Blob([$('txSdpText').value.replace(/\n/g, '\r\n')], { type: 'application/sdp' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `${$('txSdpCard').dataset.id || 'testsender'}.sdp`;
+    link.click();
+    URL.revokeObjectURL(link.href);
   });
 
   async function txSubmit(start) {
