@@ -32,6 +32,7 @@ add_library(st2110_core STATIC
     src/core/SapDirectory.cpp
     src/core/Sdp.cpp
     src/core/SyntheticSender.cpp
+    src/core/SystemInfo.cpp
     src/core/TestSender.cpp
     src/core/TestSignal.cpp
     src/core/TimeSeries.cpp
@@ -54,6 +55,7 @@ endif()
 add_executable(st2110-monitor
     src/app/main.cpp
     src/demo/DemoSource.cpp
+    src/demo/DemoSystemProbe.cpp
     src/discovery/Discovery.cpp
     src/web/WebServer.cpp
 )

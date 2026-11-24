@@ -49,6 +49,7 @@
       <button data-tab="ptp">PTP</button>
       <button data-tab="redundancy">ST 2022-7</button>
       <button data-tab="counters">Pakete</button>
+      <button data-tab="system">System</button>
       <button data-tab="events">Ereignisse <span class="badge" id="eventBadge"></span></button>
     </nav>
 
@@ -111,6 +112,18 @@
           <h3>Per SAP angekündigt</h3>
           <div class="table-scroll"><table class="flows" id="announcedTable"></table></div>
         </div>
+      </section>
+
+      <!-- System -->
+      <section data-view="system" class="view">
+        <div class="card">
+          <div class="card-head"><h3>Messrechner <span class="hint" id="sysInfo"></span></h3></div>
+          <table class="kv" id="sysHost"></table>
+        </div>
+        <div id="sysNics"></div>
+        <p class="hint">Nur Anzeige. Ports an <code>vfio-pci</code> (DPDK) haben keine Kernel-Schnittstelle: Ihre Angaben und das
+          SFP-Modul stammen aus der Momentaufnahme, die <code>setup-host.sh bind</code> vor dem Binden anlegt; Diagnosewerte
+          (Temperatur, Sendeleistung) sind dann nicht live.</p>
       </section>
 
       <!-- Testsender -->

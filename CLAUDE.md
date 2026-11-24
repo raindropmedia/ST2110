@@ -55,10 +55,10 @@ horizontales Scrollen.
 
 | Pfad | Inhalt |
 | --- | --- |
-| `src/core/` | Ohne MTL: `Options` (Flows als `FlowConfig`), `Sdp`, `FrameRate`, `AudioFormat`, `VideoTimingModel` (Grenzwerte und Urteil wie MTL), `VideoPacketAnalyzer`, `AudioPacketAnalyzer`, `PtpMonitor`/`PathSkew`, `Histogram`, `TimeSeries`, `TimingStats`, `FlowMonitor` (ein Flow, threadsicher), `MonitorHub` (alle Flows, PTP, Ereignisse, Erkennung), `FlowController` (Flows zur Laufzeit), `Preview` (RFC 4175 → RGB, Ton-Ringpuffer, Pegel, Testbild/-ton), `PacketParser`, `FlowTable` (erkannte Flows, Formatschätzung), `SapDirectory`, `Report`, `SyntheticSender`, `TestSender` (Testsender zur Laufzeit: Zustände, Hintergrundstart, `TxBackend`), `TestSignal` (Testbild/Testton im Transportformat), `NetworkInfo` (Standardroute) |
+| `src/core/` | Ohne MTL: `Options` (Flows als `FlowConfig`), `Sdp`, `FrameRate`, `AudioFormat`, `VideoTimingModel` (Grenzwerte und Urteil wie MTL), `VideoPacketAnalyzer`, `AudioPacketAnalyzer`, `PtpMonitor`/`PathSkew`, `Histogram`, `TimeSeries`, `TimingStats`, `FlowMonitor` (ein Flow, threadsicher), `MonitorHub` (alle Flows, PTP, Ereignisse, Erkennung), `FlowController` (Flows zur Laufzeit), `Preview` (RFC 4175 → RGB, Ton-Ringpuffer, Pegel, Testbild/-ton), `PacketParser`, `FlowTable` (erkannte Flows, Formatschätzung), `SapDirectory`, `Report`, `SyntheticSender`, `TestSender` (Testsender zur Laufzeit: Zustände, Hintergrundstart, `TxBackend`), `TestSignal` (Testbild/Testton im Transportformat), `NetworkInfo` (Standardroute), `SystemInfo` (Tab „System“: Host, Karten, SFP über `SystemProbe`/`ethtool`; Auswertung der Ausgaben einzeln testbar) |
 | `src/mtl/` | `MtlSource`: MTL-Instanz, je Flow `st20_rx`/`st30_rx` mit Timing-Parser, Paket-Rückruf, PTP, Zähler; `PreviewWorker` wandelt Vorschaubilder außerhalb des Datenpfads; Testsender als dritter Port (`TxSession`, `st20p_tx`/`st30p_tx`) |
 | `src/discovery/` | `Discovery`: AF_PACKET-Mitschnitt und SAP-Empfang auf einer Kernel-Schnittstelle (nur Linux) |
-| `src/demo/` | `DemoSource`: synthetische Flows mit umschaltbaren Störungen, simulierte Erkennung und SAP; `DemoTxBackend` (Testsender ohne Senden) |
+| `src/demo/` | `DemoSource`: synthetische Flows mit umschaltbaren Störungen, simulierte Erkennung und SAP; `DemoTxBackend` (Testsender ohne Senden), `DemoSystemProbe` (feste Beispieldaten für System-Tab und Tests) |
 | `src/web/` | `WebServer`: statische Dateien und JSON-API |
 | `src/app/` | `main.cpp` von `st2110-monitor` |
 | `webui/` | Oberfläche (`index.html`, `style.css`, `charts.js`, `app.js`) |

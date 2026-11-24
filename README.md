@@ -133,6 +133,15 @@ sauber (SIGINT). `scripts/install-service.sh --remove` entfernt den Dienst, `/et
 Die Web-Oberfläche hat keine Anmeldung: `--http` an die Verwaltungsadresse binden, nicht an `0.0.0.0`; der
 Verwaltungsport darf nie in `ST2110_BIND_PORTS` stehen.
 
+**Tab „System“:** zeigt den Messrechner (Kernel, CPU, Hugepages, IOMMU, Kernel-Parameter) und alle Intel-Netzwerkkarten
+mit PCI-Adresse, Treiber und Firmware, PCIe-Anbindung (Warnung bei weniger Lanes als möglich), Link, MAC sowie dem
+**SFP-Modul** (Hersteller, Teilenummer, Seriennummer, Datum, Wellenlänge, Leitungslänge, Temperatur, Sende- und
+Empfangsleistung, Laserstrom, Alarme und Schwellen; über `ethtool -m`, dazu `apt install ethtool`). Der Tab ist nur
+eine Anzeige und braucht keine Anmeldung. Ein Port an `vfio-pci` hat keine Kernel-Schnittstelle mehr: Seine Angaben
+stammen aus der Momentaufnahme, die `scripts/setup-host.sh bind` vor dem Binden unter `/run/st2110/nic/<pci>.txt`
+ablegt (auch einzeln mit `setup-host.sh snapshot <pci>`); Diagnosewerte sind dann nicht live. Wer die Live-Werte
+braucht, gibt den Port kurz mit `setup-host.sh unbind` zurück.
+
 **Erkennung:** Im DPDK-Betrieb liest das Programm von selbst auf dem **Verwaltungsport** (Schnittstelle mit der
 Standardroute) alle UDP/RTP-Flows mit und empfängt SAP; `--no-discover` schaltet das ab. Mit IGMP-Snooping im
 Switch sieht der Verwaltungsport nur SAP und selbst abonnierte Gruppen, für eine vollständige Sicht braucht es
@@ -174,6 +183,7 @@ Programm als **reiner Netz-Scanner**, auch ohne MTL: `sudo st2110-monitor --disc
 | `PUT /api/tx/<id>` | Einstellungen ändern (`{"spec":"…"}`), nur im Zustand `stopped` oder `error` |
 | `POST /api/tx/<id>/start`, `POST /api/tx/<id>/stop` | Senden starten (im Hintergrund, MTL wartet auf PTP) bzw. beenden |
 | `DELETE /api/tx/<id>` | Testsender löschen |
+| `GET /api/system` | Host (Kernel, CPU, Hugepages, IOMMU) und Netzwerkkarten: PCI, Treiber, Link, ethtool-Angaben, SFP-Modul (Hersteller, Teilenummer, Seriennummer, Diagnosewerte, Alarme); nur lesend, 5 s zwischengespeichert |
 | `POST /api/reset` | Messwerte zurücksetzen |
 | `GET/POST /api/demo` | Störung der Demo abfragen bzw. setzen (`{"preset": "burst"}`) |
 

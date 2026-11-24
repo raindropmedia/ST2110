@@ -4,8 +4,10 @@
 #include "core/MonitorHub.h"
 #include "core/TestSender.h"
 
+#include <chrono>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -39,6 +41,11 @@ namespace st2110 {
 //   POST   /api/tx/<id>/start            senden (der Start läuft im Hintergrund: MTL wartet auf PTP)
 //   POST   /api/tx/<id>/stop             Senden beenden
 //   DELETE /api/tx/<id>                  Testsender löschen
+//   GET    /api/system                   Host (Kernel, CPU, Hugepages, IOMMU) und Netzwerkkarten: PCI,
+//   Treiber,
+//                                        Link, ethtool-Angaben und SFP-Modul (Hersteller, Seriennummer,
+//                                        Diagnose- werte); Ports an vfio-pci zeigen die Momentaufnahme vom
+//                                        Binden (live: false). Nur lesend; 5 s zwischengespeichert.
 //   POST   /api/reset                    Messwerte zurücksetzen
 //   GET    /api/demo                     Störungen der Demo (nur mit --demo)
 //   POST   /api/demo                     {"preset": "burst"}
@@ -62,6 +69,9 @@ class WebServer {
     bool start(const std::string& host, uint16_t port, std::string& error);
     void stop();
 
+    // Quelle für GET /api/system; ohne sie antwortet der Endpunkt mit {"available": false}.
+    void setSystemInfo(std::function<nlohmann::json()> provider);
+
   private:
     MonitorHub& hub_;
     FlowController* controller_;
@@ -71,6 +81,10 @@ class WebServer {
     std::optional<DemoControl> demo_;
     std::unique_ptr<httplib::Server> server_;
     std::thread thread_;
+    std::function<nlohmann::json()> systemInfo_;
+    std::mutex systemMutex_;
+    nlohmann::json systemCache_;
+    std::chrono::steady_clock::time_point systemCacheTime_{};
 };
 
 } // namespace st2110

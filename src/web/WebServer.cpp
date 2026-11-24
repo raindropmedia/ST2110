@@ -63,6 +63,20 @@ bool WebServer::start(const std::string& host, uint16_t port, std::string& error
         sendJson(res,
                  hub_.snapshot(req.has_param("flow") ? req.get_param_value("flow") : std::string{}, window));
     });
+    s.Get("/api/system", [this](const httplib::Request&, httplib::Response& res) {
+        if (!systemInfo_) {
+            sendJson(res, json{{"available", false}});
+            return;
+        }
+        // ethtool -m liest das Modul über I2C und dauert; höchstens alle 5 s neu abfragen.
+        std::lock_guard lock(systemMutex_);
+        const auto now = std::chrono::steady_clock::now();
+        if (systemCache_.is_null() || now - systemCacheTime_ > std::chrono::seconds(5)) {
+            systemCache_ = systemInfo_();
+            systemCacheTime_ = std::chrono::steady_clock::now();
+        }
+        sendJson(res, systemCache_);
+    });
     s.Post("/api/reset", [this](const httplib::Request&, httplib::Response& res) {
         hub_.reset();
         sendJson(res, json{{"ok", true}});
@@ -363,6 +377,10 @@ bool WebServer::start(const std::string& host, uint16_t port, std::string& error
     }
     thread_ = std::thread([this] { server_->listen_after_bind(); });
     return true;
+}
+
+void WebServer::setSystemInfo(std::function<nlohmann::json()> provider) {
+    systemInfo_ = std::move(provider);
 }
 
 void WebServer::stop() {

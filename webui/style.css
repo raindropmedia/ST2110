@@ -253,3 +253,17 @@ table { border-collapse: collapse; width: 100%; }
   .grid.two { grid-template-columns: 1fr; }
   main { padding: 12px 16px 40px; }
 }
+
+/* System */
+table.kv { border-collapse: collapse; width: 100%; }
+table.kv th, table.kv td { padding: 4px 6px; border-bottom: 1px solid var(--grid); text-align: left; vertical-align: top; }
+table.kv th { color: var(--muted); font-weight: 500; font-size: 12px; width: 38%; white-space: nowrap; }
+table.kv td { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; white-space: pre-line; }
+table.kv td.bad { color: var(--failed); }
+.nic-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.nic-head h3 { margin: 0; }
+.nic .grid.two { margin-top: 0; }
+.nic h4 { margin: 12px 0 4px; font-size: 12px; color: var(--muted); font-weight: 600; }
+.nic details { margin-top: 8px; }
+.nic summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.nic .note { color: var(--muted); font-size: 12px; margin: 6px 0 0; }

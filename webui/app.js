@@ -21,6 +21,7 @@
     lastEventCount: 0,
     seenEvents: 0,
     info: null,
+    system: null,   // letzte Antwort von /api/system
     tx: null,        // letzte Antwort von /api/tx
     txEditing: null, // ID des Eintrags, dessen Einstellungen gerade im Formular stehen
   };
@@ -77,6 +78,7 @@
     if (tab === 'events') { state.seenEvents = state.lastEventCount; $('eventBadge').textContent = ''; }
     if (tab === 'flows') pollFlows();
     if (tab === 'txgen') pollTx();
+    if (tab === 'system') pollSystem();
     if (tab !== 'preview') leavePreview();
     writeHash();
     render();
@@ -186,6 +188,7 @@
     setInterval(poll, 500);
     setInterval(() => { if (state.tab === 'flows' && !state.paused) pollFlows(); }, 1000);
     setInterval(() => { if (state.tab === 'txgen') pollTx(); }, 1000);
+    setInterval(() => { if (state.tab === 'system') pollSystem(); }, 5000);
   }
 
   function updateRates(snap) {
@@ -220,6 +223,7 @@
     switch (state.tab) {
       case 'flows': renderFlows(); break;
       case 'txgen': renderTx(); break;
+      case 'system': renderSystem(); break;
       case 'overview': renderOverview(s); break;
       case 'preview': renderPreviewCards(s); break;
       case 'video': renderVideo(s); break;
@@ -706,7 +710,7 @@
   function updateTabs(s) {
     const kind = s.flow ? s.flow.kind : null;
     const allowed = {
-      flows: true, txgen: true, ptp: true, events: true,
+      flows: true, txgen: true, system: true, ptp: true, events: true,
       overview: !!kind, counters: !!kind, redundancy: !!kind, preview: !!kind,
       video: kind === 'video', profile: kind === 'video', audio: kind === 'audio',
     };
@@ -946,6 +950,101 @@
       txMessage('Fehler: ' + err.message, true);
       return null;
     }
+  }
+
+  // ---------- System ----------
+  async function pollSystem() {
+    try {
+      const res = await fetch('api/system', { cache: 'no-store' });
+      if (!res.ok) return;
+      state.system = await res.json();
+      if (state.tab === 'system') renderSystem();
+    } catch (_) { /* Verbindungsfehler meldet die Abfrage des Snapshots */ }
+  }
+
+  function kvRows(rows) {
+    return rows.filter(r => r[1] !== '' && r[1] !== null && r[1] !== undefined)
+      .map(r => `<tr><th>${esc(r[0])}</th><td${r[2] ? ` class="${r[2]}"` : ''}>${esc(String(r[1]))}</td></tr>`).join('');
+  }
+
+  function listRows(items, only) {
+    const wanted = only ? items.filter(i => only.includes(i.key)) : items;
+    return wanted.map(i => [i.key, i.value]);
+  }
+
+  function pick(items, key) { const i = items.find(x => x.key === key); return i ? i.value : ''; }
+
+  function renderSystem() {
+    const d = state.system;
+    if (!d) return;
+    if (d.available === false) {
+      $('sysHost').innerHTML = '<tr><td class="empty">Systemangaben sind nicht verfügbar.</td></tr>';
+      $('sysNics').innerHTML = '';
+      return;
+    }
+    const h = d.host;
+    const hp = h.hugepages;
+    $('sysInfo').textContent = h.hostname || '';
+    $('sysHost').innerHTML = kvRows([
+      ['Kernel', h.kernel],
+      ['CPU', h.cpuModel ? `${h.cpuModel} (${h.cpuThreads} Threads)` : ''],
+      ['CPU-Regler', h.cpuGovernor],
+      ['Hugepages', hp.total === null ? '' : `${fmt(hp.total, 0)} × ${fmt(hp.sizeKb / 1024, 0)} MB, frei ${fmt(hp.free, 0)}`],
+      ['IOMMU-Gruppen', h.iommuGroups],
+      ['Kernel-Parameter', h.cmdline],
+      ['Verwaltungsschnittstelle', h.managementInterface],
+      ['Laufzeit des Rechners', h.uptimeSec === null ? '' : fmtDuration(h.uptimeSec)],
+    ]);
+    $('sysNics').innerHTML = d.nics.map(nicCard).join('') ||
+      '<div class="card"><p class="empty">Keine Intel-Netzwerkkarte gefunden.</p></div>';
+  }
+
+  function nicCard(n) {
+    const di = n.driverInfo || [];
+    const li = n.linkInfo || [];
+    const snapshot = n.snapshotTime ? new Date(n.snapshotTime * 1000).toLocaleString('de-DE') : '';
+    const tags = [
+      n.role ? `<span class="tag">${esc(n.role)}</span>` : '',
+      n.management ? '<span class="tag">Verwaltung</span>' : '',
+      n.live ? '<span class="tag video">live</span>' : `<span class="tag audio">${snapshot ? 'Momentaufnahme ' + esc(snapshot) : 'ohne Messwerte'}</span>`,
+    ].join(' ');
+    const pcie = n.pcie || {};
+    const lane = pcie.currentWidth ? `${pcie.currentSpeed} × ${pcie.currentWidth}` +
+      ((pcie.maxWidth && pcie.currentWidth !== pcie.maxWidth) || (pcie.maxSpeed && pcie.currentSpeed !== pcie.maxSpeed)
+        ? ` (möglich: ${pcie.maxSpeed} × ${pcie.maxWidth})` : '') : '';
+    const lanes = pcie.currentWidth && pcie.maxWidth && Number(pcie.currentWidth) < Number(pcie.maxWidth);
+    const card = kvRows([
+      ['Modell', n.model],
+      ['PCI-Adresse', n.pci],
+      ['Kennungen (Hersteller:Gerät)', `${n.vendorId}:${n.deviceId}` + (n.subsystemDeviceId ? ` · Subsystem ${n.subsystemVendorId}:${n.subsystemDeviceId}` : '')],
+      ['Treiber', n.driver || '(keiner)'],
+      ['Treiber-Version', pick(di, 'version')],
+      ['Firmware', pick(di, 'firmware-version')],
+      ['Schnittstelle', n.interface],
+      ['MAC-Adresse', n.mac],
+      ['MTU', n.mtu],
+      ['PCIe-Anbindung', lane, lanes ? 'bad' : ''],
+      ['NUMA-Knoten', n.numaNode === null ? '' : n.numaNode],
+      ['IOMMU-Gruppe', n.iommuGroup],
+    ]);
+    const link = kvRows(listRows(li, ['Link detected', 'Speed', 'Duplex', 'Port', 'Auto-negotiation',
+      'Supported FEC modes', 'Advertised FEC modes', 'Supported link modes', 'Advertised link modes']));
+    const m = n.module || {};
+    const warnings = (m.alarms || []).filter(a => /^on$/i.test(String(a.value).trim()));
+    const mod = m.present
+      ? `<h4>Modul</h4><table class="kv">${kvRows(listRows(m.identity))}</table>` +
+        ((m.dom || []).length ? `<h4>Diagnosewerte${n.live ? '' : ' (zum Zeitpunkt der Momentaufnahme)'}</h4><table class="kv">${kvRows(listRows(m.dom))}</table>`
+          : '<p class="note">Das Modul meldet keine Diagnosewerte (z. B. Kupferkabel/DAC).</p>') +
+        (warnings.length ? `<p class="note" style="color:var(--failed)">Alarm aktiv: ${warnings.map(w => esc(w.key)).join(', ')}</p>` : '') +
+        ((m.alarms || []).length ? `<details><summary>Schwellen und Alarme (${m.alarms.length})</summary><table class="kv">${kvRows(listRows(m.alarms))}</table></details>` : '')
+      : `<p class="note">${esc(m.message || 'Keine Moduldaten.')}</p>`;
+    const title = m.present && (m.vendor || m.partNumber) ? ` · SFP ${esc([m.vendor, m.partNumber].filter(Boolean).join(' '))}` : '';
+    return `<div class="card nic">
+      <div class="nic-head"><h3>${esc(n.pci)}${title}</h3>${tags}</div>
+      <div class="grid two">
+        <div><h4>Karte</h4><table class="kv">${card}</table>${link ? `<h4>Link${n.live ? '' : ' (Stand der Momentaufnahme)'}</h4><table class="kv">${link}</table>` : ''}</div>
+        <div>${mod}</div>
+      </div></div>`;
   }
 
   function renderTx() {

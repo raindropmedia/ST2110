@@ -6,6 +6,7 @@
 #   scripts/setup-host.sh rmem                 net.core.rmem_max auf 4 MiB (nur für kernel:-Ports)
 #   scripts/setup-host.sh bind <pci>           Port für DPDK an vfio-pci binden (PF, ohne VFs)
 #   scripts/setup-host.sh unbind <pci>         Port zurück an den ice-Treiber geben
+#   scripts/setup-host.sh snapshot <pci>       Angaben von Karte und SFP-Modul (ethtool) für die Oberfläche sichern
 #   scripts/setup-host.sh ddp                  ice.pkg.zst/.xz für DPDK entpacken (bleibt erhalten)
 #
 # "bind" und "unbind" nutzen script/nicctl.sh aus dem MTL-Quellordner (MTL_SRC).
@@ -17,8 +18,51 @@ set -euo pipefail
 MTL_SRC="${MTL_SRC:-$HOME/src/Media-Transport-Library}"
 
 usage() {
-	sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+	sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
 	exit 1
+}
+
+# Sichert ethtool-Angaben (Treiber, Link, SFP-Modul) nach /run/st2110/nic/<pci>.txt, solange der Port noch am
+# Kernel-Treiber hängt. Nach dem Binden an vfio-pci gibt es keine Schnittstelle mehr; der Tab "System" zeigt
+# dann diese Momentaufnahme. Fehlt ethtool oder die Schnittstelle, passiert nichts.
+snapshot_nic() {
+	local pci="$1" net ifname dir=/run/st2110/nic file status
+	command -v ethtool >/dev/null 2>&1 || return 0
+	for net in /sys/bus/pci/devices/"$pci"/net/*; do
+		[ -e "$net" ] || continue
+		ifname=$(basename "$net")
+		install -d -m 0755 "$dir"
+		file="$dir/$pci.txt"
+		{
+			echo "### time"
+			date +%s
+			echo "### mac"
+			cat "$net/address"
+			echo "### ethtool-i"
+			ethtool -i "$ifname" 2>&1 || true
+			echo "### ethtool"
+			ethtool "$ifname" 2>&1 || true
+		} >"$file.tmp"
+		# Modul lesen; manche Treiber liefern die Daten nur bei aktiver Schnittstelle
+		status=0
+		ethtool -m "$ifname" >"$file.module" 2>&1 || status=$?
+		if [ "$status" -ne 0 ]; then
+			ip link set "$ifname" up 2>/dev/null || true
+			sleep 1
+			status=0
+			ethtool -m "$ifname" >"$file.module" 2>&1 || status=$?
+		fi
+		{
+			echo "### ethtool-m-status"
+			echo "$status"
+			echo "### ethtool-m"
+			cat "$file.module"
+		} >>"$file.tmp"
+		rm -f "$file.module"
+		mv "$file.tmp" "$file"
+		echo "Momentaufnahme von $ifname ($pci) in $file gesichert."
+		return 0
+	done
 }
 
 require_root() {
@@ -72,6 +116,7 @@ bind)
 			exit 1
 		fi
 	done
+	snapshot_nic "$2"
 	modprobe vfio-pci
 	nicctl bind_pmd "$2"
 	# VFIO übernimmt nur ganze IOMMU-Gruppen. Hängen andere Geräte der Gruppe (oft der zweite Port der
@@ -107,6 +152,12 @@ ddp)
 	fi
 	ls -l "$dst_dir/ice.pkg"
 	echo "Hinweis: Nach einem Update von linux-firmware erneut ausführen."
+	;;
+snapshot)
+	require_root
+	[ $# -eq 2 ] || usage
+	check_pci "$2"
+	snapshot_nic "$2"
 	;;
 unbind)
 	require_root

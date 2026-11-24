@@ -3,7 +3,9 @@
 #include "core/MonitorHub.h"
 #include "core/NetworkInfo.h"
 #include "core/Options.h"
+#include "core/SystemInfo.h"
 #include "demo/DemoSource.h"
+#include "demo/DemoSystemProbe.h"
 #include "demo/DemoTxBackend.h"
 #include "discovery/Discovery.h"
 #include "web/WebServer.h"
@@ -187,6 +189,26 @@ int main(int argc, char** argv) {
         web = std::make_unique<WebServer>(hub, controller, testSender, info,
                                           options.webuiDir.empty() ? ST2110_WEBUI_DIR : options.webuiDir,
                                           control);
+        // Systemansicht: im Demo-Betrieb feste Beispieldaten, sonst das echte System.
+        std::shared_ptr<SystemProbe> probe;
+        SystemOptions systemOptions;
+        if (options.demo) {
+            probe = std::make_shared<DemoSystemProbe>();
+            systemOptions = DemoSystemProbe::options();
+        } else {
+            probe = makeSystemProbe();
+            if (!options.primaryPort.port.empty() && options.primaryPort.port.rfind("kernel:", 0) != 0) {
+                systemOptions.ports.push_back({options.primaryPort.port, "Empfang"});
+            }
+            if (options.redundantPort && options.redundantPort->port.rfind("kernel:", 0) != 0) {
+                systemOptions.ports.push_back({options.redundantPort->port, "Empfang (rot.)"});
+            }
+            if (options.txPort && options.txPort->port.rfind("kernel:", 0) != 0) {
+                systemOptions.ports.push_back({options.txPort->port, "Senden"});
+            }
+            systemOptions.managementInterface = defaultRouteInterface();
+        }
+        web->setSystemInfo([probe, systemOptions] { return collectSystemInfo(*probe, systemOptions); });
         std::string host;
         uint16_t port = 0;
         parseListen(options.httpListen, host, port);
