@@ -254,6 +254,10 @@ std::optional<SdpVideo> sdpVideo(const SdpSession& session, std::string& error) 
     return sdpVideoFrom(*p, r, error);
 }
 
+SdpFlow sdpFlowOf(const SdpMedia& media) {
+    return toFlow(media);
+}
+
 std::optional<SdpVideo> sdpVideoFrom(const SdpMedia& media, const SdpMedia* redundantMedia,
                                      std::string& error) {
     const SdpMedia* p = &media;

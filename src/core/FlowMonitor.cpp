@@ -88,6 +88,12 @@ FlowMonitor::FlowMonitor(FlowConfig config, EventSink sink, Clock clock)
         const auto& f = config_.video->format;
         videoAnalyzer_ = std::make_unique<VideoPacketAnalyzer>(f.height, f.interlaced, f.rate);
     }
+    if (config_.anc) {
+        ancAnalyzer_ = std::make_unique<AncAnalyzer>(config_.anc->format);
+    }
+    if (config_.hbrmt) {
+        hbrmtAnalyzer_ = std::make_unique<HbrmtAnalyzer>();
+    }
     if (config_.audio) {
         audioAnalyzer_ = std::make_unique<AudioPacketAnalyzer>(config_.audio->format);
         audioPreview_.configure(config_.audio->format.sampleRate, config_.audio->format.channels);
@@ -310,12 +316,56 @@ StreamCounters since(const StreamCounters& a, const StreamCounters& b) {
 
 } // namespace
 
+void FlowMonitor::onHbrmtPacket(const uint8_t* rtp, size_t size) {
+    std::lock_guard lock(mutex_);
+    if (!hbrmtAnalyzer_) {
+        return;
+    }
+    if (const auto note = hbrmtAnalyzer_->addPacket(rtp, size, now())) {
+        const char* level = note->level == HbrmtAnalyzer::Level::Fail   ? "error"
+                            : note->level == HbrmtAnalyzer::Level::Warn ? "warn"
+                                                                        : "info";
+        addEventLocked(level, "ST 2022-6: " + note->text);
+    }
+}
+
+void FlowMonitor::onAncFrame(const AncFrameReport& report) {
+    std::lock_guard lock(mutex_);
+    if (!ancAnalyzer_) {
+        return;
+    }
+    const auto result = ancAnalyzer_->add(report, now());
+    static const char* const levelText[] = {"ok", "Warnung", "Fehler"};
+    const auto index = static_cast<size_t>(result.level);
+    if (!ancLastLevel_) {
+        if (result.level != AncAnalyzer::Level::Ok) {
+            addEventLocked(result.level == AncAnalyzer::Level::Fail ? "error" : "warn",
+                           std::string("Zusatzdaten: erstes Bild mit ") + levelText[index] + " (" +
+                               result.cause + ")");
+        } else {
+            addEventLocked("info", "Zusatzdaten: erstes Bild empfangen");
+        }
+        ancLastLevel_ = result.level;
+    } else if (result.level != *ancLastLevel_ && (result.level != AncAnalyzer::Level::Ok ||
+                                                  ancAnalyzer_->verdict(now()) == AncAnalyzer::Level::Ok)) {
+        addEventLocked(result.level == AncAnalyzer::Level::Fail   ? "error"
+                       : result.level == AncAnalyzer::Level::Warn ? "warn"
+                                                                  : "info",
+                       std::string("Zusatzdaten: ") + levelText[static_cast<size_t>(*ancLastLevel_)] + " → " +
+                           levelText[index] + (result.cause.empty() ? "" : " (" + result.cause + ")"));
+        ancLastLevel_ = result.level;
+    }
+}
+
 void FlowMonitor::setCounters(const StreamCounters& raw) {
     std::lock_guard lock(mutex_);
     CounterState& s = counters_;
     s.raw = raw;
     const StreamCounters c = since(raw, s.baseline);
-    const char* name = config_.video ? "Video" : "Ton";
+    const char* name = config_.video   ? "Video"
+                       : config_.audio ? "Ton"
+                       : config_.anc   ? "Zusatzdaten"
+                                       : "ST 2022-6";
     const double t = now();
     if (s.any) {
         for (size_t i = 0; i < kPathCount; ++i) {
@@ -366,6 +416,13 @@ void FlowMonitor::reset() {
         }
     }
     framesTotal_ = FrameCounters{};
+    if (ancAnalyzer_) {
+        ancAnalyzer_->reset();
+        ancLastLevel_.reset();
+    }
+    if (hbrmtAnalyzer_) {
+        hbrmtAnalyzer_->reset();
+    }
     // Zähler von MTL laufen weiter: ab jetzt zählt nur, was nach dem Zurücksetzen dazukommt.
     counters_.baseline = counters_.raw;
     counters_.current = StreamCounters{};
@@ -556,6 +613,32 @@ json FlowMonitor::audioSnapshot(const SnapshotData& d, double windowSec) const {
                 {"paths", paths}};
 }
 
+json FlowMonitor::ancSnapshot(const SnapshotData& d, double windowSec) const {
+    const auto& a = *config_.anc;
+    json flows{{"P", flowToJson(a.primary)}};
+    if (a.redundant) {
+        flows["R"] = flowToJson(*a.redundant);
+    }
+    json out = d.anc ? d.anc->toJson(d.ancNow, windowSec, kMaxSeriesPoints) : json::object();
+    out["format"] = a.format.name();
+    out["payloadType"] = a.payloadType;
+    out["flows"] = flows;
+    return out;
+}
+
+json FlowMonitor::hbrmtSnapshot(const SnapshotData& d, double windowSec) const {
+    const auto& a = *config_.hbrmt;
+    json flows{{"P", flowToJson(a.primary)}};
+    if (a.redundant) {
+        flows["R"] = flowToJson(*a.redundant);
+    }
+    json out = d.hbrmt ? d.hbrmt->toJson(d.ancNow, windowSec, kMaxSeriesPoints) : json::object();
+    out["payloadType"] = a.payloadType;
+    out["flows"] = flows;
+    out["format"] = config_.formatName();
+    return out;
+}
+
 json FlowMonitor::ratesJson(const CounterState& c) const {
     json out = json::object();
     const size_t count = config_.redundant() ? 2 : 1;
@@ -567,6 +650,36 @@ json FlowMonitor::ratesJson(const CounterState& c) const {
 }
 
 std::optional<Compliance> FlowMonitor::verdictLocked(Path path) const {
+    if (config_.anc) {
+        // ANC kennt kein narrow/wide: ok → narrow, Warnung → wide, Fehler → failed (die Oberfläche
+        // beschriftet das je nach Art des Flows um). Redundanz bewertet MTL selbst; es gibt nur den Pfad P.
+        if (path != Path::Primary || !ancAnalyzer_ || !ancAnalyzer_->hasFrames()) {
+            return std::nullopt;
+        }
+        switch (ancAnalyzer_->verdict(now())) {
+        case AncAnalyzer::Level::Ok:
+            return Compliance::Narrow;
+        case AncAnalyzer::Level::Warn:
+            return Compliance::Wide;
+        case AncAnalyzer::Level::Fail:
+            break;
+        }
+        return Compliance::Failed;
+    }
+    if (config_.hbrmt) {
+        if (path != Path::Primary || !hbrmtAnalyzer_ || !hbrmtAnalyzer_->hasPackets()) {
+            return std::nullopt;
+        }
+        switch (hbrmtAnalyzer_->verdict(now())) {
+        case HbrmtAnalyzer::Level::Ok:
+            return Compliance::Narrow;
+        case HbrmtAnalyzer::Level::Warn:
+            return Compliance::Wide;
+        case HbrmtAnalyzer::Level::Fail:
+            break;
+        }
+        return Compliance::Failed;
+    }
     if (config_.video) {
         const VideoPath& p = video_[pathIndex(path)];
         if (p.lastSecondVerdict) {
@@ -592,7 +705,7 @@ json FlowMonitor::summary() {
     return json{
         {"id", config_.id},
         {"label", config_.label},
-        {"kind", config_.video ? "video" : "audio"},
+        {"kind", config_.kind()},
         {"format", config_.formatName()},
         {"payloadType", config_.payloadType()},
         {"flows", flows},
@@ -601,7 +714,10 @@ json FlowMonitor::summary() {
         {"packets", counters_.any ? json(c.received) : json(nullptr)},
         {"lost", counters_.any ? json(std::max(c.lost, c.paths[0].lost + c.paths[1].lost)) : json(nullptr)},
         {"unrecovered", counters_.any ? json(c.unrecovered) : json(nullptr)},
-        {"units", config_.video ? framesTotal_.total() : audio_[0].total.periods()}};
+        {"units", config_.video   ? framesTotal_.total()
+                  : config_.anc   ? (ancAnalyzer_ ? ancAnalyzer_->frames() : 0)
+                  : config_.hbrmt ? (hbrmtAnalyzer_ ? hbrmtAnalyzer_->frames() : 0)
+                                  : audio_[0].total.periods()}};
 }
 
 json FlowMonitor::snapshot(double windowSec) {
@@ -660,13 +776,22 @@ json FlowMonitor::snapshot(double windowSec) {
         d->skew = videoSkew_;
         d->skewSeries = videoSkew_.series().tail(windowSec);
         d->counters = counters_;
+        if (ancAnalyzer_) {
+            d->anc = *ancAnalyzer_;
+        }
+        if (hbrmtAnalyzer_) {
+            d->hbrmt = *hbrmtAnalyzer_;
+        }
+        d->ancNow = now();
     }
     return json{
         {"id", config_.id},
         {"label", config_.label},
-        {"kind", config_.video ? "video" : "audio"},
+        {"kind", config_.kind()},
         {"video", config_.video ? videoSnapshot(*d, windowSec) : json(nullptr)},
         {"audio", config_.audio ? audioSnapshot(*d, windowSec) : json(nullptr)},
+        {"anc", config_.anc ? ancSnapshot(*d, windowSec) : json(nullptr)},
+        {"hbrmt", config_.hbrmt ? hbrmtSnapshot(*d, windowSec) : json(nullptr)},
         {"counters", d->counters.any ? countersJson(d->counters.current) : json(nullptr)},
         {"rates", ratesJson(d->counters)},
     };
@@ -676,12 +801,23 @@ json FlowMonitor::takeIntervalRecord() {
     std::lock_guard lock(mutex_);
     json paths = json::object();
     const size_t count = config_.redundant() ? 2 : 1;
-    json out{{"label", config_.label},
-             {"kind", config_.video ? "video" : "audio"},
-             {"format", config_.formatName()}};
+    json out{{"label", config_.label}, {"kind", config_.kind()}, {"format", config_.formatName()}};
+    if (config_.anc && ancAnalyzer_) {
+        out["anc"] = ancAnalyzer_->toJson(now(), 1.0, 1);
+        out["anc"].erase("series");
+        out["anc"].erase("system10");
+    }
+    if (config_.hbrmt && hbrmtAnalyzer_) {
+        out["hbrmt"] = hbrmtAnalyzer_->toJson(now(), 1.0, 1);
+        out["hbrmt"].erase("series");
+        out["hbrmt"].erase("system10");
+    }
     for (size_t i = 0; i < count; ++i) {
         const Path path = static_cast<Path>(i);
         json entry;
+        if (!config_.video && !config_.audio) {
+            continue; // ANC und ST 2022-6 liefern ihre Werte unter "anc" bzw. "hbrmt"
+        }
         if (config_.video) {
             entry = statsToJson(video_[i].interval);
             video_[i].interval.reset();
@@ -721,12 +857,23 @@ json FlowMonitor::summaryRecord() {
     std::lock_guard lock(mutex_);
     json paths = json::object();
     const size_t count = config_.redundant() ? 2 : 1;
-    json out{{"label", config_.label},
-             {"kind", config_.video ? "video" : "audio"},
-             {"format", config_.formatName()}};
+    json out{{"label", config_.label}, {"kind", config_.kind()}, {"format", config_.formatName()}};
+    if (config_.anc && ancAnalyzer_) {
+        out["anc"] = ancAnalyzer_->toJson(now(), 1.0, 1);
+        out["anc"].erase("series");
+        out["anc"].erase("system10");
+    }
+    if (config_.hbrmt && hbrmtAnalyzer_) {
+        out["hbrmt"] = hbrmtAnalyzer_->toJson(now(), 1.0, 1);
+        out["hbrmt"].erase("series");
+        out["hbrmt"].erase("system10");
+    }
     for (size_t i = 0; i < count; ++i) {
         const Path path = static_cast<Path>(i);
         json entry;
+        if (!config_.video && !config_.audio) {
+            continue;
+        }
         if (config_.video) {
             entry = statsToJson(video_[i].total);
             if (videoAnalyzer_) {
@@ -767,6 +914,12 @@ uint64_t FlowMonitor::received() const {
     std::lock_guard lock(mutex_);
     if (config_.video) {
         return std::max(framesTotal_.total(), video_[0].total.frames());
+    }
+    if (config_.anc) {
+        return ancAnalyzer_ ? ancAnalyzer_->frames() : 0;
+    }
+    if (config_.hbrmt) {
+        return hbrmtAnalyzer_ ? hbrmtAnalyzer_->frames() : 0;
     }
     return audio_[0].total.periods() + audio_[1].total.periods();
 }

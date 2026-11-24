@@ -89,6 +89,8 @@ class MonitorHub {
     std::vector<std::shared_ptr<FlowMonitor>> flows_;
     unsigned nextVideo_ = 1;
     unsigned nextAudio_ = 1;
+    unsigned nextAnc_ = 1;
+    unsigned nextHbrmt_ = 1;
 
     PtpMonitor ptp_;
     PtpState lastPtpState_ = PtpState::NoSync;

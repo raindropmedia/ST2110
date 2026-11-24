@@ -16,10 +16,12 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 
 # Kern ohne MTL: Optionen, Auswertung, JSON-Ausgabe (auch ohne Karte testbar).
 add_library(st2110_core STATIC
+    src/core/AncAnalyzer.cpp
     src/core/AudioFormat.cpp
     src/core/AudioPacketAnalyzer.cpp
     src/core/FrameRate.cpp
     src/core/Histogram.cpp
+    src/core/HbrmtAnalyzer.cpp
     src/core/FlowMonitor.cpp
     src/core/FlowTable.cpp
     src/core/MonitorHub.cpp

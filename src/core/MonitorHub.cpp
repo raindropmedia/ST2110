@@ -41,8 +41,10 @@ MonitorHub::MonitorHub(HubConfig config, Clock clock)
 
 std::string MonitorHub::nextIdLocked(Media media) {
     while (true) {
-        const std::string id =
-            media == Media::Video ? "v" + std::to_string(nextVideo_++) : "a" + std::to_string(nextAudio_++);
+        const std::string id = media == Media::Video   ? "v" + std::to_string(nextVideo_++)
+                               : media == Media::Audio ? "a" + std::to_string(nextAudio_++)
+                               : media == Media::Anc   ? "d" + std::to_string(nextAnc_++)
+                                                       : "h" + std::to_string(nextHbrmt_++);
         const bool used =
             std::any_of(flows_.begin(), flows_.end(), [&](const auto& f) { return f->id() == id; });
         if (!used) {
@@ -81,7 +83,11 @@ std::shared_ptr<FlowMonitor> MonitorHub::addFlow(FlowConfig config, std::string&
             config.id = nextIdLocked(config.media());
         }
         if (config.label.empty()) {
-            config.label = (config.video ? "Video " : "Ton ") + config.primary().ip;
+            config.label = std::string(config.video   ? "Video "
+                                       : config.audio ? "Ton "
+                                       : config.anc   ? "Zusatzdaten "
+                                                      : "ST 2022-6 ") +
+                           config.primary().ip;
         }
         const std::string label = config.label;
         auto sink = [this, label](const std::string& id, const std::string& level, const std::string& text) {
@@ -259,7 +265,7 @@ json MonitorHub::flowsJson() {
             json media = json::array();
             for (const auto& f : e.flows) {
                 const uint32_t ip = parseIp(f.primary().ip);
-                media.push_back(json{{"kind", f.video ? "video" : "audio"},
+                media.push_back(json{{"kind", f.kind()},
                                      {"label", f.label},
                                      {"format", f.formatName()},
                                      {"address", f.primary().ip + ":" + std::to_string(f.primary().udpPort)},
@@ -343,7 +349,7 @@ json MonitorHub::startRecord() {
             paths["R"] = flowAddressToJson(*c.redundant());
         }
         flows[c.id] = json{{"label", c.label},
-                           {"kind", c.video ? "video" : "audio"},
+                           {"kind", c.kind()},
                            {"format", c.formatName()},
                            {"payloadType", c.payloadType()},
                            {"paths", paths}};

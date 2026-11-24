@@ -97,14 +97,17 @@ bool WebServer::start(const std::string& host, uint16_t port, std::string& error
         std::vector<std::string> errors;
         if (body.contains("spec") && body["spec"].is_string()) {
             const std::string kind = body.value("kind", "");
-            if (kind != "video" && kind != "audio") {
-                sendJson(res, json{{"error", "kind muss video oder audio sein"}}, 400);
+            if (kind != "video" && kind != "audio" && kind != "anc" && kind != "hbrmt") {
+                sendJson(res, json{{"error", "kind muss video, audio, anc oder hbrmt sein"}}, 400);
                 return;
             }
             FlowConfig flow;
             std::string error;
-            if (!parseFlowSpec(kind == "video" ? Media::Video : Media::Audio, body["spec"].get<std::string>(),
-                               flow, error)) {
+            const Media media = kind == "video"   ? Media::Video
+                                : kind == "audio" ? Media::Audio
+                                : kind == "anc"   ? Media::Anc
+                                                  : Media::Hbrmt;
+            if (!parseFlowSpec(media, body["spec"].get<std::string>(), flow, error)) {
                 sendJson(res, json{{"error", error}}, 400);
                 return;
             }

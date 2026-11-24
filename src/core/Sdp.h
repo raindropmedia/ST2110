@@ -74,6 +74,9 @@ struct SdpAudio {
 std::optional<SdpVideo> sdpVideo(const SdpSession& session, std::string& error);
 std::optional<SdpAudio> sdpAudio(const SdpSession& session, std::string& error);
 
+// Ziel eines Mediums (Adresse, Port, Quelle) für Medien ohne eigene Umwandlung (ANC, ST 2022-6).
+SdpFlow sdpFlowOf(const SdpMedia& media);
+
 // Ein Medium (und optional sein redundantes Gegenstück) umwandeln.
 std::optional<SdpVideo> sdpVideoFrom(const SdpMedia& media, const SdpMedia* redundant, std::string& error);
 std::optional<SdpAudio> sdpAudioFrom(const SdpMedia& media, const SdpMedia* redundant, std::string& error);

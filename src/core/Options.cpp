@@ -151,8 +151,31 @@ bool parseListen(const std::string& text, std::string& host, uint16_t& port) {
            port != 0;
 }
 
+const char* FlowConfig::kind() const {
+    switch (media()) {
+    case Media::Video:
+        return "video";
+    case Media::Audio:
+        return "audio";
+    case Media::Anc:
+        return "anc";
+    case Media::Hbrmt:
+        break;
+    }
+    return "hbrmt";
+}
+
 std::string FlowConfig::formatName() const {
-    return video ? video->format.name() : audio->format.name();
+    if (video) {
+        return video->format.name();
+    }
+    if (audio) {
+        return audio->format.name();
+    }
+    if (anc) {
+        return "ANC " + anc->format.name();
+    }
+    return "ST 2022-6";
 }
 
 bool parseFlowSpec(Media media, const std::string& text, FlowConfig& flow, std::string& error) {
@@ -173,6 +196,8 @@ bool parseFlowSpec(Media media, const std::string& text, FlowConfig& flow, std::
     }
     VideoFlow video;
     AudioFlow audio;
+    AncFlow anc;
+    HbrmtFlow hbrmt;
     std::optional<FlowAddress> red;
     std::string source, redSource;
     for (size_t i = 1; i < parts.size(); ++i) {
@@ -196,12 +221,16 @@ bool parseFlowSpec(Media media, const std::string& text, FlowConfig& flow, std::
         } else if (key == "start-vrx" && media == Media::Video) {
             ok = parseUnsigned(value, video.startVrx);
         } else if (key == "pt") {
-            ok = parseUnsigned(value, media == Media::Video ? video.payloadType : audio.payloadType);
-        } else if (key == "format" && media == Media::Video) {
+            ok = parseUnsigned(value, media == Media::Video   ? video.payloadType
+                                      : media == Media::Audio ? audio.payloadType
+                                      : media == Media::Anc   ? anc.payloadType
+                                                              : hbrmt.payloadType);
+        } else if (key == "format" && (media == Media::Video || media == Media::Anc)) {
             auto f = parseVideoFormat(value);
             ok = f.has_value();
             if (ok) {
                 video.format = *f;
+                anc.format = *f;
             }
         } else if (key == "format" && media == Media::Audio) {
             ok = parseAudioEncoding(value, audio.format);
@@ -218,8 +247,9 @@ bool parseFlowSpec(Media media, const std::string& text, FlowConfig& flow, std::
         if (!ok) {
             error = "Ungültiger Wert für " + key + ": \"" + value + "\"";
             if (key == "format") {
-                error += media == Media::Video ? " (z. B. 1920x1080p50; Raten: " + frameRateNames() + ")"
-                                               : " (z. B. L24/48000/2)";
+                error += (media == Media::Video || media == Media::Anc)
+                             ? " (z. B. 1920x1080p50; Raten: " + frameRateNames() + ")"
+                             : " (z. B. L24/48000/2)";
             } else if (key == "ptime") {
                 error += " (0.125, 0.25, 0.333, 1 oder 4)";
             }
@@ -231,16 +261,31 @@ bool parseFlowSpec(Media media, const std::string& text, FlowConfig& flow, std::
     if (red) {
         red->sourceIp = redSource;
     }
-    if (media == Media::Video) {
+    flow.video.reset();
+    flow.audio.reset();
+    flow.anc.reset();
+    flow.hbrmt.reset();
+    switch (media) {
+    case Media::Video:
         video.primary = *address;
         video.redundant = red;
         flow.video = video;
-        flow.audio.reset();
-    } else {
+        break;
+    case Media::Audio:
         audio.primary = *address;
         audio.redundant = red;
         flow.audio = audio;
-        flow.video.reset();
+        break;
+    case Media::Anc:
+        anc.primary = *address;
+        anc.redundant = red;
+        flow.anc = anc;
+        break;
+    case Media::Hbrmt:
+        hbrmt.primary = *address;
+        hbrmt.redundant = red;
+        flow.hbrmt = hbrmt;
+        break;
     }
     return true;
 }
@@ -260,12 +305,43 @@ std::vector<FlowConfig> flowsFromSdp(const std::string& sdpText, std::vector<std
             ++mediaCount;
         }
     }
+    auto lowerCase = [](std::string s) {
+        for (auto& ch : s) {
+            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        }
+        return s;
+    };
     for (const auto& [p, r] : pairs) {
         FlowConfig flow;
         std::string merror;
         const std::string name =
             session->name.empty() || session->name == "-" ? std::string("SDP") : session->name;
-        if (p->type == "video") {
+        const std::string encoding = lowerCase(p->encoding);
+        if (p->type == "video" && encoding == "smpte291") {
+            // ST 2110-40: Medientyp video, Kodierung smpte291 (RFC 8331). Die Bildrate steht nicht in der
+            // SDP; exactframerate, falls vorhanden, sonst 50.
+            AncFlow anc;
+            anc.primary = fromSdp(sdpFlowOf(*p));
+            if (r != nullptr) {
+                anc.redundant = fromSdp(sdpFlowOf(*r));
+            }
+            anc.payloadType = static_cast<uint8_t>(p->payloadType);
+            if (auto rate = parseExactFrameRate(p->fmtp.count("exactframerate") ? p->fmtp.at("exactframerate")
+                                                                                : "")) {
+                anc.format.rate = *rate;
+            }
+            flow.anc = anc;
+            flow.label = mediaCount > 1 ? name + " ANC" : name;
+        } else if (p->type == "video" && (encoding == "smpte2022-6" || encoding == "smpte2022-6-fec")) {
+            HbrmtFlow hbrmt;
+            hbrmt.primary = fromSdp(sdpFlowOf(*p));
+            if (r != nullptr) {
+                hbrmt.redundant = fromSdp(sdpFlowOf(*r));
+            }
+            hbrmt.payloadType = static_cast<uint8_t>(p->payloadType);
+            flow.hbrmt = hbrmt;
+            flow.label = mediaCount > 1 ? name + " SDI" : name;
+        } else if (p->type == "video") {
             auto v = sdpVideoFrom(*p, r, merror);
             if (!v) {
                 errors.push_back(merror);
@@ -312,10 +388,13 @@ std::vector<FlowConfig> flowsFromSdp(const std::string& sdpText, std::vector<std
 
 void validateFlow(const FlowConfig& flow, std::vector<std::string>& errors,
                   std::vector<std::string>& warnings) {
-    const std::string name =
-        flow.label.empty() ? (flow.video ? std::string("Video") : std::string("Ton")) : flow.label;
-    if (flow.video.has_value() == flow.audio.has_value()) {
-        errors.push_back(name + ": Flow muss genau Video oder Ton sein.");
+    const std::string name = flow.label.empty() ? std::string(flow.video   ? "Video"
+                                                              : flow.audio ? "Ton"
+                                                              : flow.anc   ? "ANC"
+                                                                           : "ST 2022-6")
+                                                : flow.label;
+    if (flow.mediaCount() != 1) {
+        errors.push_back(name + ": Flow muss genau Video, Ton, ANC oder ST 2022-6 sein.");
         return;
     }
     validateAddress(flow.primary(), name + " P", errors, warnings);
@@ -333,8 +412,14 @@ void validateFlow(const FlowConfig& flow, std::vector<std::string>& errors,
         if (f.height < 64 || f.height > 8704 || (f.interlaced && f.height % 2 != 0)) {
             errors.push_back(name + ": Höhe muss zwischen 64 und 8704 liegen (bei Zeilensprung gerade).");
         }
-    } else if (auto problem = validateAudioFormat(flow.audio->format); !problem.empty()) {
-        errors.push_back(name + ": " + problem);
+    } else if (flow.audio) {
+        if (auto problem = validateAudioFormat(flow.audio->format); !problem.empty()) {
+            errors.push_back(name + ": " + problem);
+        }
+    } else if (flow.hbrmt && flow.hbrmt->payloadType != 98 && flow.hbrmt->payloadType != 99) {
+        warnings.push_back(
+            name + ": ST 2022-6 nutzt Payload-Typ 98 (27-MHz-Takt) oder 99 (FEC); der Typ kann auch per SDP "
+                   "festgelegt sein.");
     }
 }
 
@@ -527,6 +612,16 @@ ParseResult parseOptions(const std::vector<std::string>& args, FileReader readFi
              flowSpecs.emplace_back(Media::Audio, v);
              return !v.empty();
          }},
+        {"--anc",
+         [&](const std::string& v) {
+             flowSpecs.emplace_back(Media::Anc, v);
+             return !v.empty();
+         }},
+        {"--hbrmt",
+         [&](const std::string& v) {
+             flowSpecs.emplace_back(Media::Hbrmt, v);
+             return !v.empty();
+         }},
         {"--sdp",
          [&](const std::string& v) {
              sdpFiles.push_back(v);
@@ -622,7 +717,11 @@ ParseResult parseOptions(const std::vector<std::string>& args, FileReader readFi
         FlowConfig flow;
         std::string error;
         if (!parseFlowSpec(media, spec, flow, error)) {
-            result.errors.push_back((media == Media::Video ? "--video " : "--audio ") + spec + ": " + error);
+            const char* option = media == Media::Video   ? "--video "
+                                 : media == Media::Audio ? "--audio "
+                                 : media == Media::Anc   ? "--anc "
+                                                         : "--hbrmt ";
+            result.errors.push_back(option + spec + ": " + error);
             continue;
         }
         o.flows.push_back(flow);
@@ -729,7 +828,13 @@ std::string usageText(const std::string& programName) {
         << "                              pt=96, source=ip, red-source=ip, name=Text\n"
         << "  --audio <ip:port[,…]>       Schlüssel: red=ip:port, format=L24/48000/2, ptime=1 (0.125, 0.25,\n"
         << "                              0.333, 4), pt=97, source=ip, red-source=ip, name=Text\n"
-        << "  --sdp <datei>               alle Video- und Tonmedien der SDP (DUP-Gruppen ergeben P und R)\n"
+        << "  --anc <ip:port[,…]>         Zusatzdaten ST 2110-40; Schlüssel: red, format=1920x1080p50 (nur\n"
+        << "                              Bildrate/Zeilensprung zählen), pt=100, source, red-source, name\n"
+        << "  --hbrmt <ip:port[,…]>       SDI über IP nach ST 2022-6; Schlüssel: red, pt=98, source, "
+           "red-source,\n"
+        << "                              name (das Format steht im Nutzdaten-Header)\n"
+        << "  --sdp <datei>               alle Video-, Ton-, ANC- und ST-2022-6-Medien der SDP (DUP-Gruppen: "
+           "P und R)\n"
         << "  --max-flows <n>             Höchstzahl gleichzeitiger Flows (Vorgabe 8)\n"
         << "\n"
         << "Testsender (MTL, eigener Port derselben Karte, Zeitbezug über PTP wie beim Empfang):\n"

@@ -1,6 +1,8 @@
 #pragma once
 
+#include "core/AncAnalyzer.h"
 #include "core/AudioPacketAnalyzer.h"
+#include "core/HbrmtAnalyzer.h"
 #include "core/Options.h"
 #include "core/Preview.h"
 #include "core/PtpMonitor.h"
@@ -76,6 +78,11 @@ class FlowMonitor {
 
     void onAudioPacket(Path path, uint32_t rtpTimestamp, uint64_t arrivalNs, bool hwTimestamp);
     void onAudioPeriod(Path path, const AudioTiming& timing);
+
+    // ST 2110-40: ein Bild mit seinen ANC-Paketen (MTL st40_rx, Frame-Ebene).
+    void onAncFrame(const AncFrameReport& report);
+    // ST 2022-6: ein RTP-Paket ab dem RTP-Header (MTL st20_rx im RTP-Passthrough).
+    void onHbrmtPacket(const uint8_t* rtp, size_t size);
 
     void setCounters(const StreamCounters& counters);
     void addEvent(const std::string& level, const std::string& text);
@@ -155,6 +162,9 @@ class FlowMonitor {
         PathSkew skew;
         TimeSeries skewSeries;
         CounterState counters;
+        std::optional<AncAnalyzer> anc;
+        std::optional<HbrmtAnalyzer> hbrmt;
+        double ancNow = 0;
     };
 
     double now() const { return clock_(); }
@@ -163,6 +173,8 @@ class FlowMonitor {
     void recordAudioPeriod(Path path, const AudioTiming& timing);
     nlohmann::json videoSnapshot(const SnapshotData& d, double windowSec) const;
     nlohmann::json audioSnapshot(const SnapshotData& d, double windowSec) const;
+    nlohmann::json ancSnapshot(const SnapshotData& d, double windowSec) const;
+    nlohmann::json hbrmtSnapshot(const SnapshotData& d, double windowSec) const;
     nlohmann::json countersJson(const StreamCounters& counters) const;
     nlohmann::json countersDelta(const StreamCounters& now, const StreamCounters& before) const;
     nlohmann::json profileToJson(const PacketProfile& profile) const;
@@ -190,6 +202,10 @@ class FlowMonitor {
     std::array<AudioPath, kPathCount> audio_;
     uint64_t audioPackets_ = 0;
     uint64_t audioSwPackets_ = 0;
+
+    std::unique_ptr<HbrmtAnalyzer> hbrmtAnalyzer_;
+    std::unique_ptr<AncAnalyzer> ancAnalyzer_;
+    std::optional<AncAnalyzer::Level> ancLastLevel_;
 
     CounterState counters_;
 

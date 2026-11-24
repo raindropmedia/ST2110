@@ -43,27 +43,60 @@ struct AudioFlow {
     uint8_t payloadType = 97;
 };
 
-enum class Media { Video, Audio };
+// Zusatzdaten nach ST 2110-40 (RFC 8331). Das Format (Bildrate, Zeilensprung) legt die Bildperiode fest, auf
+// die sich die ANC-Pakete beziehen; Auflösung spielt keine Rolle.
+struct AncFlow {
+    FlowAddress primary;
+    std::optional<FlowAddress> redundant;
+    VideoFormat format;
+    uint8_t payloadType = 100;
+};
 
-// Ein überwachter Flow: genau eines von video/audio ist gesetzt.
+// SDI-Transport nach ST 2022-6 (High Bit Rate Media Transport). Das Format steht im Nutzdaten-Header.
+struct HbrmtFlow {
+    FlowAddress primary;
+    std::optional<FlowAddress> redundant;
+    uint8_t payloadType = 98; // ST 2022-6: 98 (27-MHz-Takt) bzw. 99 (FEC)
+};
+
+enum class Media { Video, Audio, Anc, Hbrmt };
+
+// Ein überwachter Flow: genau eines von video/audio/anc/hbrmt ist gesetzt.
 struct FlowConfig {
-    std::string id;    // kurz und eindeutig, z. B. "v1", "a2" (leer: vergibt der Hub)
+    std::string id;    // kurz und eindeutig, z. B. "v1", "a2", "d3", "h4" (leer: vergibt der Hub)
     std::string label; // Anzeige, z. B. "Kamera 1"
     std::optional<VideoFlow> video;
     std::optional<AudioFlow> audio;
+    std::optional<AncFlow> anc;
+    std::optional<HbrmtFlow> hbrmt;
 
-    Media media() const { return video ? Media::Video : Media::Audio; }
-    std::string formatName() const;
-    const FlowAddress& primary() const { return video ? video->primary : audio->primary; }
-    const std::optional<FlowAddress>& redundant() const {
-        return video ? video->redundant : audio->redundant;
+    Media media() const {
+        return video ? Media::Video : audio ? Media::Audio : anc ? Media::Anc : Media::Hbrmt;
     }
-    uint8_t payloadType() const { return video ? video->payloadType : audio->payloadType; }
+    // "video" | "audio" | "anc" | "hbrmt" (JSON-Schlüssel und Art in der Oberfläche)
+    const char* kind() const;
+    // Anzahl gesetzter Medien; gültig ist genau eines.
+    int mediaCount() const { return (video ? 1 : 0) + (audio ? 1 : 0) + (anc ? 1 : 0) + (hbrmt ? 1 : 0); }
+    std::string formatName() const;
+    const FlowAddress& primary() const {
+        return video ? video->primary : audio ? audio->primary : anc ? anc->primary : hbrmt->primary;
+    }
+    const std::optional<FlowAddress>& redundant() const {
+        return video ? video->redundant : audio ? audio->redundant : anc ? anc->redundant : hbrmt->redundant;
+    }
+    uint8_t payloadType() const {
+        return video   ? video->payloadType
+               : audio ? audio->payloadType
+               : anc   ? anc->payloadType
+                       : hbrmt->payloadType;
+    }
 };
 
 // Beschreibung eines Flows wie auf der Kommandozeile: "ip:port[,schlüssel=wert…]".
 // Video: red, format, pt, source, red-source, name. Ton: red, format (L24/48000/2), ptime, pt, source,
-// red-source, name. Liefert false und eine Fehlermeldung bei ungültigen Angaben.
+// red-source, name. Zusatzdaten (ST 2110-40): red, format (nur Bildrate und Zeilensprung zählen, z. B.
+// 1920x1080p50), pt, source, red-source, name. ST 2022-6: red, pt, source, red-source, name. Liefert false
+// und eine Fehlermeldung bei ungültigen Angaben.
 bool parseFlowSpec(Media media, const std::string& text, FlowConfig& flow, std::string& error);
 // Alle Video- und Tonmedien einer SDP-Beschreibung (DUP-Gruppen ergeben P und R).
 std::vector<FlowConfig> flowsFromSdp(const std::string& sdpText, std::vector<std::string>& errors);

@@ -1,6 +1,7 @@
 add_executable(st2110_tests
     test_main.cpp
     test_frame_rate.cpp
+    test_anc_hbrmt.cpp
     test_audio.cpp
     test_discovery.cpp
     test_histogram.cpp

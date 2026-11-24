@@ -8,7 +8,7 @@ namespace {
 
 // Bekannte Breiten für die Formatschätzung aus Bytes je Zeile.
 constexpr std::array<uint32_t, 7> kWidths{720, 1280, 1440, 1920, 2048, 3840, 4096};
-constexpr std::array<double, 4> kClocks{90000, 48000, 96000, 44100};
+constexpr std::array<double, 5> kClocks{90000, 48000, 96000, 44100, 27000000};
 
 // Nächstliegende Bildrate; 59,94 und 60 liegen nur 0,1 % auseinander, daher der genaue Wert aus
 // den RTP-Zeitstempeln (Takte je Bild), nicht aus der Zahl der Marker je Sekunde.
@@ -160,6 +160,10 @@ void FlowTable::classify(Entry& e) const {
         return;
     }
     f.kind = "rtp";
+    if (f.clockRate == 27000000) {
+        f.kind = "hbrmt"; // ST 2022-6: RTP-Takt 27 MHz (Payload-Typ 98/99 laut Norm)
+        return;
+    }
     const bool mostlyRfc = f.packets > 0 && e.rfcPackets * 10 >= f.packets * 9;
     if (f.clockRate == 90000 || (f.clockRate == 0 && mostlyRfc)) {
         if (mostlyRfc) {
