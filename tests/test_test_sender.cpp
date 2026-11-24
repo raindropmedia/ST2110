@@ -293,3 +293,23 @@ TEST_CASE("Testsender: ANC und ST 2022-6 anlegen, starten, Art nicht änderbar")
     CHECK(error.find("Art") != std::string::npos);
     CHECK(sender.update(id2, sdi, error));
 }
+
+TEST_CASE("Testsender: Pixelformate und Packmodus, 4:2:0 nur progressiv") {
+    FakeBackend backend;
+    TestSender sender(backend, 4, "0000:01:00.1", "192.168.211.101");
+    std::string id, error;
+    REQUIRE(sender.add(videoFlow("239.211.0.7:20000,format=1920x1080p50,sampling=RGB,depth=12,packing=GPM"),
+                       true, id, error));
+    REQUIRE(waitFor(sender, id, TxState::Sending));
+    const auto j = sender.toJson();
+    CHECK(j["flows"][0]["video"]["sampling"] == "RGB");
+    CHECK(j["flows"][0]["video"]["depth"] == 12);
+    CHECK(j["flows"][0]["video"]["packing"] == "GPM");
+    CHECK(j["flows"][0]["format"] == "1920x1080p50 RGB 12 Bit");
+    std::string id2;
+    CHECK_FALSE(sender.add(videoFlow("239.211.0.8:20000,format=1920x1080i50,sampling=YCbCr-4:2:0,depth=8"),
+                           false, id2, error));
+    CHECK(error.find("4:2:0") != std::string::npos);
+    CHECK(sender.add(videoFlow("239.211.0.8:20000,format=1920x1080p50,sampling=YCbCr-4:2:0,depth=8"), false,
+                     id2, error));
+}

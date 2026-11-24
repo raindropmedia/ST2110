@@ -14,3 +14,4 @@ Eine überholte Entscheidung wird nicht gelöscht, sondern auf „ersetzt durch 
 | [0006](0006-vorschau.md) | Bild- und Tonvorschau im Browser (JPEG über stb_image_write) | angenommen |
 | [0007](0007-testsender-und-erkennung-am-verwaltungsport.md) | Testsender in derselben MTL-Instanz, Erkennung am Verwaltungsport | angenommen |
 | [0008](0008-st2110-40-st2022-6-und-systempruefung.md) | ST 2110-40, ST 2022-6 und Systemprüfung ST 2110-10 | angenommen |
+| [0009](0009-pixelformate-nach-st2110-20.md) | Alle Pixelformate von ST 2110-20 erkennen, überwachen, senden | angenommen |

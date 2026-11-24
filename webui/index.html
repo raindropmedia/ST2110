@@ -167,6 +167,15 @@
               </select>
             </label>
             <label data-kind="video anc" class="check"><span>Zeilensprung (Rate = Halbbilder/s)</span><input name="interlaced" type="checkbox"></label>
+            <label data-kind="video">Abtastung
+              <select name="sampling"><option value="YCbCr-4:2:2" selected>YCbCr 4:2:2</option><option value="YCbCr-4:2:0">YCbCr 4:2:0 (nur progressiv)</option><option value="YCbCr-4:4:4">YCbCr 4:4:4</option><option value="RGB">RGB</option></select>
+            </label>
+            <label data-kind="video">Bittiefe
+              <select name="depth"><option value="8">8 Bit</option><option value="10" selected>10 Bit</option><option value="12">12 Bit</option><option value="16">16 Bit</option></select>
+            </label>
+            <label data-kind="video">Packmodus
+              <select name="packing"><option value="BPM" selected>BPM (Block)</option><option value="GPM">GPM (allgemein)</option><option value="GPM_SL">GPM_SL (eine Zeile je Paket)</option></select>
+            </label>
             <label data-kind="video">Start-VRX (Pakete, 0 = automatisch) <input name="startVrx" type="number" min="0" max="1000" value="0"></label>
 
             <label data-kind="audio" hidden>Abtastrate

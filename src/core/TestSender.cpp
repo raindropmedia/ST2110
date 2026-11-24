@@ -68,6 +68,10 @@ bool TestSender::validate(const FlowConfig& flow, const std::string& ignoreId, s
     if (flow.redundant()) {
         errors.push_back("Der Testsender sendet ohne ST 2022-7 (kein red=).");
     }
+    if (flow.video && flow.video->format.pixel.sampling == Sampling::Ycbcr420 &&
+        flow.video->format.interlaced) {
+        errors.push_back("Das Testbild für YCbCr 4:2:0 gibt es nur progressiv (kein Zeilensprung).");
+    }
     for (const auto& e : entries_) {
         if (e->id != ignoreId && e->flow.primary().ip == flow.primary().ip &&
             e->flow.primary().udpPort == flow.primary().udpPort) {
@@ -278,6 +282,9 @@ nlohmann::json TestSender::toJson() const {
                                  {"height", v.height},
                                  {"rate", frameRateName(v.rate)},
                                  {"interlaced", v.interlaced},
+                                 {"sampling", v.pixel.sdpSampling()},
+                                 {"depth", v.pixel.depth},
+                                 {"packing", packingName(f.video->packing)},
                                  {"startVrx", f.video->startVrx}};
         } else if (f.anc) {
             item["anc"] =

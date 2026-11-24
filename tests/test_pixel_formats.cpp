@@ -126,3 +126,88 @@ TEST_CASE("Flow-Angabe mit Abtastung, Tiefe und Packmodus; Breite muss zur Pixel
                           error));
     CHECK(f.video->format.pixel == PixelFormat{Sampling::Ycbcr420, 8});
 }
+
+#include "core/TestSignal.h"
+
+namespace {
+
+// Liest den Wert mit der angegebenen Bitbreite an der Bitposition (MSB zuerst).
+uint32_t readBits(const std::vector<uint8_t>& data, size_t bitPos, int bits) {
+    uint32_t v = 0;
+    for (int i = 0; i < bits; ++i) {
+        const size_t p = bitPos + static_cast<size_t>(i);
+        v = (v << 1) | ((data[p / 8] >> (7 - p % 8)) & 1u);
+    }
+    return v;
+}
+
+} // namespace
+
+TEST_CASE("Testbild: 4:2:2 10 Bit ist bitgleich zum bewährten Generator") {
+    for (bool interlaced : {false, true}) {
+        TestPatternGenerator reference(1920, 1080, interlaced);
+        PixelPatternGenerator generic({Sampling::Ycbcr422, 10}, 1920, 1080, interlaced);
+        CHECK(generic.frameBytes() == reference.lineBytes() * reference.linesPerFrame());
+        CHECK(generic.lineBytes() == reference.lineBytes());
+        std::vector<uint8_t> a(generic.frameBytes()), b(generic.frameBytes());
+        for (double t : {0.0, 0.03, 0.5, 1.2, 3.77, 10.0}) {
+            for (bool second : {false, true}) {
+                if (second && !interlaced) {
+                    continue;
+                }
+                reference.render(a.data(), reference.lineBytes(), t, second);
+                generic.render(b.data(), t, second);
+                CHECK_MESSAGE(a == b, "t=" << t << " interlaced=" << interlaced << " second=" << second);
+            }
+        }
+    }
+}
+
+TEST_CASE("Testbild: alle 16 Pixelformate haben die Größe des Puffers und die erwartete Bitfolge") {
+    for (const auto& pf : allPixelFormats()) {
+        const uint32_t w = 320;
+        const uint32_t h = 180;
+        PixelPatternGenerator g(pf, w, h, false);
+        INFO(pf.name());
+        // Puffergröße wie st20_frame_size() von MTL: Breite × Höhe × Byte je Bildpunkt
+        CHECK(g.frameBytes() == static_cast<size_t>(w) * h * pf.pgroupBytes() / pf.pgroupPixels());
+        std::vector<uint8_t> buf(g.frameBytes());
+        g.render(buf.data(), 0.5, false);
+        // Oberste Zeile = 75-%-Farbbalken: der erste Balken ist weiß (R=G=B=191 bei 75 %); erste Bildpunkte
+        // prüfen.
+        const int d = pf.depth;
+        switch (pf.sampling) {
+        case Sampling::Rgb: {
+            const uint32_t v = readBits(buf, 0, d);
+            // R = G = B beim ersten (weißen) Balken
+            CHECK(readBits(buf, static_cast<size_t>(d), d) == v);
+            CHECK(readBits(buf, static_cast<size_t>(2 * d), d) == v);
+            CHECK(v > (1u << d) / 2);
+            break;
+        }
+        case Sampling::Ycbcr444: {
+            // Cb Y Cr: weiß hat Cb = Cr = 128 · 2^(d−8)
+            const uint32_t mid = 128u << (d - 8);
+            CHECK(readBits(buf, 0, d) == mid);
+            CHECK(readBits(buf, static_cast<size_t>(2 * d), d) == mid);
+            CHECK(readBits(buf, static_cast<size_t>(d), d) > (16u << (d - 8)));
+            break;
+        }
+        case Sampling::Ycbcr422: {
+            const uint32_t mid = 128u << (d - 8);
+            CHECK(readBits(buf, 0, d) == mid);                          // Cb
+            CHECK(readBits(buf, static_cast<size_t>(2 * d), d) == mid); // Cr
+            CHECK(readBits(buf, static_cast<size_t>(d), d) ==
+                  readBits(buf, static_cast<size_t>(3 * d), d)); // Y0 = Y1
+            break;
+        }
+        case Sampling::Ycbcr420: {
+            const uint32_t mid = 128u << (d - 8);
+            CHECK(readBits(buf, static_cast<size_t>(4 * d), d) == mid);             // Cb
+            CHECK(readBits(buf, static_cast<size_t>(5 * d), d) == mid);             // Cr
+            CHECK(readBits(buf, 0, d) == readBits(buf, static_cast<size_t>(d), d)); // Y00 = Y01
+            break;
+        }
+        }
+    }
+}

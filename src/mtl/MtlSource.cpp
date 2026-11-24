@@ -231,6 +231,19 @@ struct TxSession : TxBackend::Session {
     std::vector<uint8_t> ancData;
     std::atomic<uint16_t> ancNextFrame{0};
     static constexpr uint16_t kAncFrames = 3;
+    // ST 2110-20 auf Frame-Ebene (st20_tx) für alle Pixelformate außer YCbCr 4:2:2 10 Bit und für GPM: Das
+    // Testbild liegt schon als Folge von Pixelgruppen vor (PixelPatternGenerator), MTL wandelt nichts.
+    st20_tx_handle framed = nullptr;
+    std::unique_ptr<PixelPatternGenerator> pixelPattern;
+    static constexpr uint16_t kFramedBuffers = 3;
+    struct FramedSlot {
+        std::atomic<int> state{0}; // 0 frei, 1 gefüllt, 2 wird gesendet
+        bool secondField = false;
+    };
+    FramedSlot slots[kFramedBuffers];
+    std::atomic<uint16_t> framedNext{0};
+    std::mutex framedMutex;
+    std::condition_variable framedCv;
     // ST 2022-6: RTP-Passthrough über eine st20-Sitzung auf RTP-Ebene (MTL kennt ST 2022-6 nicht).
     st20_tx_handle hbrmt = nullptr;
     mtl_handle mtlHandle = nullptr;
@@ -242,6 +255,7 @@ struct TxSession : TxBackend::Session {
 
     void stop() {
         stopping = true;
+        framedCv.notify_all();
         if (thread.joinable()) {
             thread.join();
         }
@@ -261,6 +275,10 @@ struct TxSession : TxBackend::Session {
             st20_tx_free(hbrmt);
             hbrmt = nullptr;
         }
+        if (framed != nullptr) {
+            st20_tx_free(framed);
+            framed = nullptr;
+        }
     }
 
     // Port und Ziel eintragen (ohne ST 2022-7).
@@ -278,6 +296,9 @@ struct TxSession : TxBackend::Session {
     }
 
     bool open(mtl_handle mtl, const std::string& txPort, std::string& error) {
+        if (flow.video && (!flow.video->format.pixel.isDefault() || flow.video->packing != Packing::Bpm)) {
+            return openFramed(mtl, txPort, error);
+        }
         if (flow.video) {
             const auto& v = *flow.video;
             struct st20p_tx_ops ops {};
@@ -526,6 +547,98 @@ struct TxSession : TxBackend::Session {
         const auto ns = static_cast<uint64_t>(static_cast<long double>(frame) * periodNs);
         return static_cast<uint32_t>((ns / 1'000'000'000ULL) * 27'000'000ULL +
                                      (ns % 1'000'000'000ULL) * 27'000'000ULL / 1'000'000'000ULL);
+    }
+
+    // --- ST 2110-20 auf Frame-Ebene ---
+    static int onFramedNext(void* priv, uint16_t* next, struct st20_tx_frame_meta* meta) {
+        auto* self = static_cast<TxSession*>(priv);
+        const uint16_t i = self->framedNext.load();
+        if (self->slots[i].state.load() != 1) {
+            return -EBUSY; // noch nicht gefüllt: MTL fragt erneut
+        }
+        self->slots[i].state = 2;
+        *next = i;
+        meta->second_field = self->slots[i].secondField;
+        self->framedNext = static_cast<uint16_t>((i + 1) % kFramedBuffers);
+        return 0;
+    }
+
+    static int onFramedDone(void* priv, uint16_t idx, struct st20_tx_frame_meta*) {
+        auto* self = static_cast<TxSession*>(priv);
+        self->slots[idx].state = 0;
+        self->framedCv.notify_all();
+        return 0;
+    }
+
+    bool openFramed(mtl_handle mtl, const std::string& txPort, std::string& error) {
+        const auto& v = *flow.video;
+        struct st20_tx_ops ops {};
+        ops.name = flow.label.c_str();
+        ops.priv = this;
+        ops.num_port = 1;
+        std::snprintf(ops.port[0], MTL_PORT_MAX_LEN, "%s", txPort.c_str());
+        if (!toIpv4(flow.primary().ip, ops.dip_addr[0])) {
+            error = "Ungültige Zieladresse: " + flow.primary().ip;
+            return false;
+        }
+        ops.udp_port[0] = flow.primary().udpPort;
+        ops.type = ST20_TYPE_FRAME_LEVEL;
+        ops.pacing = ST21_PACING_NARROW;
+        ops.packing = toMtlPacking(v.packing);
+        ops.width = v.format.width;
+        ops.height = v.format.height;
+        ops.fps = toMtlFps(v.format.rate);
+        ops.interlaced = v.format.interlaced;
+        ops.fmt = toMtlFmt(v.format.pixel);
+        ops.payload_type = v.payloadType;
+        ops.framebuff_cnt = kFramedBuffers;
+        ops.start_vrx = v.startVrx;
+        ops.get_next_frame = &TxSession::onFramedNext;
+        ops.notify_frame_done = &TxSession::onFramedDone;
+        pixelPattern = std::make_unique<PixelPatternGenerator>(v.format.pixel, v.format.width,
+                                                               v.format.height, v.format.interlaced);
+        framed = st20_tx_create(mtl, &ops);
+        if (framed == nullptr) {
+            error =
+                "st20_tx_create fehlgeschlagen (Format, Packmodus, Adresse, Sendeport; Details im MTL-Log).";
+            return false;
+        }
+        const size_t bufferBytes = st20_tx_get_framebuffer_size(framed);
+        if (bufferBytes != pixelPattern->frameBytes()) {
+            error = "MTL erwartet " + std::to_string(bufferBytes) + " Byte je Bild, das Testbild hat " +
+                    std::to_string(pixelPattern->frameBytes()) + " Byte (Pixelformat " +
+                    v.format.pixel.name() + ").";
+            return false;
+        }
+        thread = std::thread([this] { framedLoop(); });
+        return true;
+    }
+
+    void framedLoop() {
+        const auto& format = flow.video->format;
+        const double rate = 1e9 / framePeriodNs(format.rate);
+        uint64_t index = 0;
+        uint16_t producer = 0;
+        while (!stopping) {
+            {
+                std::unique_lock lock(framedMutex);
+                framedCv.wait_for(lock, std::chrono::milliseconds(20),
+                                  [&] { return stopping.load() || slots[producer].state.load() == 0; });
+            }
+            if (stopping) {
+                break;
+            }
+            if (slots[producer].state.load() != 0) {
+                continue;
+            }
+            const bool secondField = format.interlaced && (index % 2 == 1);
+            auto* buffer = static_cast<uint8_t*>(st20_tx_get_framebuffer(framed, producer));
+            pixelPattern->render(buffer, static_cast<double>(index) / rate, secondField);
+            slots[producer].secondField = secondField;
+            slots[producer].state = 1;
+            producer = static_cast<uint16_t>((producer + 1) % kFramedBuffers);
+            ++index;
+        }
     }
 
     void videoLoop() {

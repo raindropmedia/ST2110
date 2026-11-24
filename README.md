@@ -142,6 +142,10 @@ Abtastung und Tiefe, aus dem Ende der letzten Zeile die Breite, aus der Zeilenza
 Leitung nicht zu trennen (YCbCr 4:4:4 und RGB gleicher Tiefe; 3 Byte je Bildpunkt trifft auf RGB 8, 4:4:4 8, 4:2:2 12 und 4:2:0 16 Bit zu):
 die Oberfläche zeigt das wahrscheinlichste Format und nennt die übrigen. Der Packmodus ist nur dann sicher (GPM), wenn ein Paket mehrere
 Zeilensegmente trägt, sonst „BPM (oder GPM)“. Die Vorschau rechnet nur YCbCr 4:2:2 mit 10 Bit um.
+**Testsender** (`--tx-video …,sampling=…,depth=…,packing=…` und Tab „Testsender“): alle 16 Formate und alle Bildraten; das Testbild
+erzeugt der Messplatz selbst als Pixelgruppen (für 4:2:2 10 Bit bitgleich zum bisherigen Testbild). 4:2:2 10 Bit mit BPM läuft wie
+bisher über `st20p_tx`, alle anderen Formate und GPM über `st20_tx` (Frame-Ebene); 4:2:0 nur progressiv. Noch nicht auf Hardware
+geprüft (ADR 0009).
 
 **Weitere Flow-Arten:** `--anc <ip:port[,…]>` überwacht Zusatzdaten nach ST 2110-40 (Tab „Zusatzdaten ST 2110-40“: Zählung je
 DID/SDID mit Namen, Zeilen, RTP-Zeitstempelschritt, Zeitbezug zur PTP-Zeit, Verluste, letztes Bild; über `st40_rx` von

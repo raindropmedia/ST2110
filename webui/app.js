@@ -859,7 +859,8 @@
   function txSpec(f) {
     const spec = [`${f.ip}:${f.udpPort}`];
     if (f.kind === 'video') {
-      spec.push(`format=${f.video.width}x${f.video.height}${f.video.interlaced ? 'i' : 'p'}${f.video.rate}`);
+      spec.push(`format=${f.video.width}x${f.video.height}${f.video.interlaced ? 'i' : 'p'}${f.video.rate}`,
+                `sampling=${f.video.sampling}`, `depth=${f.video.depth}`, `packing=${f.video.packing}`);
     } else if (f.kind === 'anc') {
       spec.push(`format=1920x1080${f.anc.interlaced ? 'i' : 'p'}${f.anc.rate}`);
     } else if (f.kind === 'audio') {
@@ -871,9 +872,15 @@
     return spec.join(',');
   }
 
+  // Bit je Bildpunkt: Werte je Bildpunkt (4:2:2 = 2, 4:2:0 = 1,5, 4:4:4 und RGB = 3) mal Tiefe
+  function bitsPerPixel(sampling, depth) {
+    const samples = sampling === 'YCbCr-4:2:2' ? 2 : sampling === 'YCbCr-4:2:0' ? 1.5 : 3;
+    return samples * depth;
+  }
+
   // Nutzdatenrate in Gbit/s (4:2:2, 10 Bit = 20 Bit je Bildpunkt; bei Zeilensprung halbe Höhe je Halbbild)
-  function txVideoGbit(width, height, rate, interlaced) {
-    return width * (interlaced ? height / 2 : height) * 20 * rate / 1e9;
+  function txVideoGbit(width, height, rate, interlaced, sampling = 'YCbCr-4:2:2', depth = 10) {
+    return width * (interlaced ? height / 2 : height) * bitsPerPixel(sampling, +depth) * rate / 1e9;
   }
 
   function txFormValues() {
@@ -885,6 +892,9 @@
       out.rate = f.rate.value;
       out.interlaced = f.interlaced.checked;
       out.startVrx = f.startVrx.value;
+      out.sampling = f.sampling.value;
+      out.depth = f.depth.value;
+      out.packing = f.packing.value;
     } else if (kind === 'anc') {
       out.rate = f.rate.value;
       out.interlaced = f.interlaced.checked;
@@ -901,7 +911,7 @@
     const v = txFormValues();
     const spec = [v.address];
     if (v.kind === 'video') {
-      spec.push(`format=${v.resolution}${v.interlaced ? 'i' : 'p'}${v.rate}`);
+      spec.push(`format=${v.resolution}${v.interlaced ? 'i' : 'p'}${v.rate}`, `sampling=${v.sampling}`, `depth=${v.depth}`, `packing=${v.packing}`);
       if (+v.startVrx > 0) spec.push(`start-vrx=${+v.startVrx}`);
     } else if (v.kind === 'anc') {
       spec.push(`format=1920x1080${v.interlaced ? 'i' : 'p'}${v.rate}`);
@@ -922,7 +932,8 @@
     if (kind === 'video') {
       const m = /^(\d+)x(\d+)$/.exec(v.resolution);
       if (!m) { est.textContent = 'Auflösung als Breite x Höhe, z. B. 1920x1080.'; return; }
-      const gbit = txVideoGbit(+m[1], +m[2], parseFloat(v.rate), v.interlaced);
+      const gbit = txVideoGbit(+m[1], +m[2], parseFloat(v.rate), v.interlaced, v.sampling, v.depth);
+      if (v.sampling === 'YCbCr-4:2:0' && v.interlaced) { est.className = 'hint warn'; est.textContent = 'YCbCr 4:2:0 gibt es als Testbild nur progressiv.'; return; }
       est.textContent = `Nutzdaten ca. ${fmt(gbit, 2)} Gbit/s (auf der Leitung rund 5 % mehr).`;
       if (gbit * 1.05 > 9.5) { est.className = 'hint warn'; est.textContent += ' Mehr, als ein 10G-Link trägt.'; }
     } else if (kind === 'anc') {
@@ -985,6 +996,9 @@
       e.rate.value = f.video.rate;
       e.interlaced.checked = f.video.interlaced;
       e.startVrx.value = f.video.startVrx || 0;
+      e.sampling.value = f.video.sampling;
+      e.depth.value = String(f.video.depth);
+      e.packing.value = f.video.packing;
     } else if (f.kind === 'anc') {
       e.rate.value = f.anc.rate;
       e.interlaced.checked = f.anc.interlaced;
@@ -1244,7 +1258,7 @@
         const busy = f.state === 'starting' || f.state === 'stopping';
         const running = f.state === 'sending' || f.state === 'starting';
         const rate = f.kind === 'video'
-          ? fmt(txVideoGbit(f.video.width, f.video.height, parseFloat(f.video.rate), f.video.interlaced) * 1000, 0) + ' Mbit/s'
+          ? fmt(txVideoGbit(f.video.width, f.video.height, parseFloat(f.video.rate), f.video.interlaced, f.video.sampling, f.video.depth) * 1000, 0) + ' Mbit/s'
           : f.kind === 'anc' ? '< 1 Mbit/s'
           : f.kind === 'hbrmt' ? '270 Mbit/s'
           : fmt(f.audio.sampleRate * f.audio.channels * f.audio.bitDepth / 1e6, 2) + ' Mbit/s';

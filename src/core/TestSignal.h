@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/PixelFormat.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -52,6 +54,54 @@ class TestPatternGenerator {
     std::vector<uint8_t> bottomLine_;
     std::vector<uint8_t> flashLine_;
     std::vector<uint8_t> boxPair_; // ein Paar Bildpunkte in der Farbe des Quadrats
+};
+
+// Testbild für beliebige Pixelformate nach ST 2110-20: derselbe Inhalt wie TestPatternGenerator, aber in der
+// Pixelgruppen-Aufteilung von Abtastung und Tiefe (RFC 4175, MSB zuerst):
+//   4:2:2  Cb Y0 Cr Y1             (2 Bildpunkte)
+//   4:4:4  Cb Y Cr / RGB: R G B    (1 Bildpunkt)
+//   4:2:0  Y00 Y01 Y10 Y11 Cb Cr   (2×2 Bildpunkte)
+// YCbCr im begrenzten Bereich (Y 16…235, C 16…240 bei 8 Bit, bei höherer Tiefe um 2^(Tiefe−8) verschoben),
+// BT.709; RGB im vollen Bereich. Das Bild liegt als lückenlose Folge von Pixelgruppen im Puffer, so wie MTL
+// es erwartet (bei 4:2:0 gehören je zwei Zeilen des Puffers zu einer Blockzeile aus zwei Bildzeilen). 4:2:0
+// mit Zeilensprung gibt es nicht. Bei 4:2:2 mit 10 Bit ist die Ausgabe bitgleich zu TestPatternGenerator.
+class PixelPatternGenerator {
+  public:
+    // width muss ein Vielfaches der Pixelgruppe sein, height bei 4:2:0 gerade.
+    PixelPatternGenerator(const PixelFormat& format, uint32_t width, uint32_t height, bool interlaced);
+
+    // Bytes eines Bildes bzw. Halbbildes (Größe des Puffers).
+    size_t frameBytes() const { return unitBytes_ * unitsPerFrame(); }
+    // Bytes einer Pufferzeile (bei 4:2:0 die halbe Blockzeile).
+    size_t lineBytes() const { return lineBytes_; }
+    uint32_t linesPerFrame() const { return interlaced_ ? height_ / 2 : height_; }
+
+    // Schreibt ein Bild (Halbbild) lückenlos nach dst (frameBytes() Byte).
+    void render(uint8_t* dst, double timeSec, bool secondField = false) const;
+
+    // Eine einzelne Zeile (Einheit) als Bytefolge, zum Prüfen: Bildzeile y (bei 4:2:0 Blockzeile y/2).
+    const PixelFormat& format() const { return format_; }
+
+  private:
+    uint32_t unitsPerFrame() const;
+    size_t unitBytes_ = 0;
+    size_t lineBytes_ = 0;
+    PixelFormat format_;
+    uint32_t width_;
+    uint32_t height_;
+    bool interlaced_;
+    uint32_t unitRows_;    // Einheiten je Bild (Bildzeilen bzw. Blockzeilen)
+    uint32_t rowsPerUnit_; // 1, bei 4:2:0 2
+    uint32_t barsEnd_;
+    uint32_t rampEnd_;
+    uint32_t box_;
+    uint32_t boxY_;
+    uint32_t align_; // Spalten je Pixelgruppe in einer Einheitszeile: Raster für Lage und Breite des Quadrats
+    std::vector<uint8_t> barsUnit_;
+    std::vector<uint8_t> rampUnit_;
+    std::vector<uint8_t> bottomUnit_;
+    std::vector<uint8_t> flashUnit_;
+    std::vector<uint8_t> boxGroup_; // eine Pixelgruppe in der Farbe des Quadrats
 };
 
 // Testton (wie generateTestTone: 1 kHz links mit EBU-Kennung, 2 kHz rechts, −18 dBFS) als PCM Big Endian
