@@ -47,4 +47,9 @@ SDP (`smpte291`, `SMPTE2022-6`), Erkennung (RTP-Takt 27 MHz = ST 2022-6; wenige 
 - Der Empfang von ANC und ST 2022-6 muss auf Hardware geprüft werden (Hinweis im Tab).
 - Ein ST-2022-6-Strom mit 3G-Rate (rund 270 000 Datagramme/s) belastet den Abholthread; bei Verlusten im MTL-Ring
   (`rtp_ring_size` 16384) den Ring vergrößern.
-- Senden von ANC und ST 2022-6 (Testsender) gibt es nicht.
+- Testsender: ANC über `st40_tx` (Frame-Ebene, drei Puffer mit gleichem Inhalt, `get_next_frame` reicht sie reihum weiter;
+  Nutzdaten Platzhalter). ST 2022-6 über `st20_tx` auf RTP-Ebene (SD 625, 25 Hz, 982 Datagramme zu 1376 Byte): MTL überschreibt
+  im RTP-Passthrough den Zeitstempel mit einem 90-kHz-Wert und erkennt Bildwechsel am Zeitstempel (`tv_build_rtp`). Mit
+  `ST20_TX_FLAG_USER_TIMESTAMP` bleibt der eigene 27-MHz-Wert, der je Bild gilt; die Norm verlangt ihn je Datagramm. Der
+  Testsender setzt CF = 0, damit kein davon abweichender Video-Zeitstempel im Header steht. Der Strom ist daher nur
+  eingeschränkt normgerecht und dient dem Test des Messplatzes; nicht auf Hardware geprüft.

@@ -272,6 +272,21 @@ TEST_CASE("Testsender: eigener Port, Video und Ton") {
     CHECK(r.options->txFlows[1].audio->format.channels == 2);
 }
 
+TEST_CASE("Testsender: ANC und ST 2022-6 aus der Kommandozeile") {
+    auto args = baseArgs();
+    for (const char* a : {"--tx-port", "0000:af:00.1", "--tx-local-ip", "192.168.10.11", "--tx-anc",
+                          "239.10.0.3:40000,format=1920x1080p25", "--tx-hbrmt", "239.10.0.4:5004"}) {
+        args.emplace_back(a);
+    }
+    auto r = parseOptions(args, fakeRead);
+    REQUIRE(r.options);
+    REQUIRE(r.options->txFlows.size() == 2);
+    CHECK(r.options->txFlows[0].anc.has_value());
+    CHECK(r.options->txFlows[0].label == "Testsender ANC");
+    CHECK(r.options->txFlows[1].hbrmt.has_value());
+    CHECK(r.options->txFlows[1].label == "Testsender ST 2022-6");
+}
+
 TEST_CASE("Testsender: Fehler werden gemeldet") {
     auto withTx = [](std::vector<std::string> extra) {
         auto args = baseArgs();

@@ -849,7 +849,9 @@
     const spec = [`${f.ip}:${f.udpPort}`];
     if (f.kind === 'video') {
       spec.push(`format=${f.video.width}x${f.video.height}${f.video.interlaced ? 'i' : 'p'}${f.video.rate}`);
-    } else {
+    } else if (f.kind === 'anc') {
+      spec.push(`format=1920x1080${f.anc.interlaced ? 'i' : 'p'}${f.anc.rate}`);
+    } else if (f.kind === 'audio') {
       spec.push(`format=L${f.audio.bitDepth}/${f.audio.sampleRate}/${f.audio.channels}`, `ptime=${f.audio.ptime}`);
     }
     if (f.kind === 'video' && f.video.startVrx) spec.push(`start-vrx=${f.video.startVrx}`);
@@ -872,7 +874,10 @@
       out.rate = f.rate.value;
       out.interlaced = f.interlaced.checked;
       out.startVrx = f.startVrx.value;
-    } else {
+    } else if (kind === 'anc') {
+      out.rate = f.rate.value;
+      out.interlaced = f.interlaced.checked;
+    } else if (kind === 'audio') {
       out.sampleRate = +f.sampleRate.value;
       out.bitDepth = +f.bitDepth.value;
       out.channels = +f.channels.value;
@@ -887,7 +892,9 @@
     if (v.kind === 'video') {
       spec.push(`format=${v.resolution}${v.interlaced ? 'i' : 'p'}${v.rate}`);
       if (+v.startVrx > 0) spec.push(`start-vrx=${+v.startVrx}`);
-    } else spec.push(`format=L${v.bitDepth}/${v.sampleRate}/${v.channels}`, `ptime=${v.ptime}`);
+    } else if (v.kind === 'anc') {
+      spec.push(`format=1920x1080${v.interlaced ? 'i' : 'p'}${v.rate}`);
+    } else if (v.kind === 'audio') spec.push(`format=L${v.bitDepth}/${v.sampleRate}/${v.channels}`, `ptime=${v.ptime}`);
     if (v.pt !== '') spec.push('pt=' + v.pt);
     if (v.name) spec.push('name=' + v.name);
     return { kind: v.kind, spec: spec.join(',') };
@@ -896,7 +903,7 @@
   function updateTxForm() {
     const form = $('txForm');
     const kind = form.elements.kind.value;
-    form.querySelectorAll('[data-kind]').forEach(el => { el.hidden = el.dataset.kind !== kind; });
+    form.querySelectorAll('[data-kind]').forEach(el => { el.hidden = !el.dataset.kind.split(' ').includes(kind); });
     // Hinweis zur Last bzw. Paketgröße
     const v = txFormValues();
     const est = $('txEstimate');
@@ -907,6 +914,10 @@
       const gbit = txVideoGbit(+m[1], +m[2], parseFloat(v.rate), v.interlaced);
       est.textContent = `Nutzdaten ca. ${fmt(gbit, 2)} Gbit/s (auf der Leitung rund 5 % mehr).`;
       if (gbit * 1.05 > 9.5) { est.className = 'hint warn'; est.textContent += ' Mehr, als ein 10G-Link trägt.'; }
+    } else if (kind === 'anc') {
+      est.textContent = 'Vier ANC-Pakete je Bild (Payload-ID, Zeitcode, AFD, CEA-708) mit Platzhalter-Nutzdaten; sehr geringe Last.';
+    } else if (kind === 'hbrmt') {
+      est.textContent = 'SD-SDI über IP: 982 Datagramme je Bild, rund 24 500 je Sekunde, etwa 270 Mbit/s. Pakete von MTL nach dem Muster des RTP-Passthrough getaktet.';
     } else {
       const perSecond = ptimePerSecond[v.ptime];
       const samples = Math.round(v.sampleRate / perSecond);
@@ -921,7 +932,7 @@
   function nextTxAddress(kind) {
     const used = new Set(((state.tx && state.tx.flows) || []).map(f => `${f.ip}:${f.udpPort}`));
     for (let i = 1; i < 250; ++i) {
-      const a = kind === 'video' ? `239.211.0.${i}:20000` : `239.211.1.${i}:30000`;
+      const a = { video: `239.211.0.${i}:20000`, audio: `239.211.1.${i}:30000`, anc: `239.211.2.${i}:40000`, hbrmt: `239.211.3.${i}:5004` }[kind] || `239.211.0.${i}:20000`;
       if (!used.has(a)) return a;
     }
     return '';
@@ -940,7 +951,7 @@
     f.kind.disabled = false;
     f.address.value = nextTxAddress(f.kind.value);
     f.name.value = '';
-    f.pt.value = f.kind.value === 'video' ? 96 : 97;
+    f.pt.value = { video: 96, audio: 97, anc: 100, hbrmt: 98 }[f.kind.value] || 96;
     $('txFormTitle').textContent = 'Testsender anlegen';
     $('txSubmit').textContent = 'Anlegen und senden';
     $('txSave').hidden = false;
@@ -963,7 +974,10 @@
       e.rate.value = f.video.rate;
       e.interlaced.checked = f.video.interlaced;
       e.startVrx.value = f.video.startVrx || 0;
-    } else {
+    } else if (f.kind === 'anc') {
+      e.rate.value = f.anc.rate;
+      e.interlaced.checked = f.anc.interlaced;
+    } else if (f.kind === 'audio') {
       e.sampleRate.value = f.audio.sampleRate;
       e.bitDepth.value = f.audio.bitDepth;
       e.channels.value = f.audio.channels;
@@ -1220,6 +1234,8 @@
         const running = f.state === 'sending' || f.state === 'starting';
         const rate = f.kind === 'video'
           ? fmt(txVideoGbit(f.video.width, f.video.height, parseFloat(f.video.rate), f.video.interlaced) * 1000, 0) + ' Mbit/s'
+          : f.kind === 'anc' ? '< 1 Mbit/s'
+          : f.kind === 'hbrmt' ? '270 Mbit/s'
           : fmt(f.audio.sampleRate * f.audio.channels * f.audio.bitDepth / 1e6, 2) + ' Mbit/s';
         return `<tr><td><span class="txstate ${f.state}">${txStateLabel[f.state] || f.state}</span>${f.state === 'starting' ? '<span class="sub">wartet ggf. auf PTP</span>' : ''}</td>
           <td>${esc(f.label)}</td><td><span class="tag ${f.kind}">${kindLabel[f.kind]}</span></td><td class="mono">${esc(f.format)}</td>
@@ -1288,7 +1304,7 @@
     const f = $('txForm').elements;
     delete f.address.dataset.touched;
     f.address.value = nextTxAddress(e.target.value);
-    f.pt.value = e.target.value === 'video' ? 96 : 97;
+    f.pt.value = { video: 96, audio: 97, anc: 100, hbrmt: 98 }[e.target.value] || 96;
     updateTxForm();
   });
   updateTxForm();

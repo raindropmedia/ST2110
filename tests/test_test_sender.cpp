@@ -266,3 +266,30 @@ TEST_CASE("Testsender: JSON für die Oberfläche") {
     CHECK(a["audio"]["bitDepth"] == 16);
     CHECK(a["audio"]["ptime"] == "125us");
 }
+
+TEST_CASE("Testsender: ANC und ST 2022-6 anlegen, starten, Art nicht änderbar") {
+    FakeBackend backend;
+    TestSender sender(backend, 4, "0000:01:00.1", "192.168.211.101");
+    std::string id, error;
+    FlowConfig anc;
+    REQUIRE(parseFlowSpec(Media::Anc, "239.211.0.3:40000,format=1920x1080p25,pt=100", anc, error));
+    REQUIRE(sender.add(anc, true, id, error));
+    CHECK(sender.list()[0].flow.label == "Testdaten t1");
+    REQUIRE(waitFor(sender, id, TxState::Sending));
+    FlowConfig sdi;
+    std::string id2;
+    REQUIRE(parseFlowSpec(Media::Hbrmt, "239.211.0.4:5004,pt=98", sdi, error));
+    REQUIRE(sender.add(sdi, true, id2, error));
+    CHECK(sender.list()[1].flow.label == "Test-SDI t2");
+    REQUIRE(waitFor(sender, id2, TxState::Sending));
+    const auto j = sender.toJson();
+    CHECK(j["flows"][0]["kind"] == "anc");
+    CHECK(j["flows"][0]["anc"]["rate"] == "25");
+    CHECK(j["flows"][1]["kind"] == "hbrmt");
+    CHECK(j["flows"][1]["hbrmt"]["datagramsPerFrame"] == 982);
+    REQUIRE(sender.stop(id2, error));
+    // Art ändern geht nicht
+    CHECK_FALSE(sender.update(id2, videoFlow("239.211.0.9:20000"), error));
+    CHECK(error.find("Art") != std::string::npos);
+    CHECK(sender.update(id2, sdi, error));
+}

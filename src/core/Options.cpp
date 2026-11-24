@@ -599,6 +599,16 @@ ParseResult parseOptions(const std::vector<std::string>& args, FileReader readFi
              txSpecs.emplace_back(Media::Video, v);
              return !v.empty();
          }},
+        {"--tx-anc",
+         [&](const std::string& v) {
+             txSpecs.emplace_back(Media::Anc, v);
+             return !v.empty();
+         }},
+        {"--tx-hbrmt",
+         [&](const std::string& v) {
+             txSpecs.emplace_back(Media::Hbrmt, v);
+             return !v.empty();
+         }},
         {"--tx-audio",
          [&](const std::string& v) {
              txSpecs.emplace_back(Media::Audio, v);
@@ -732,12 +742,18 @@ ParseResult parseOptions(const std::vector<std::string>& args, FileReader readFi
         FlowConfig flow;
         std::string error;
         if (!parseFlowSpec(media, spec, flow, error)) {
-            result.errors.push_back((media == Media::Video ? "--tx-video " : "--tx-audio ") + spec + ": " +
-                                    error);
+            const char* option = media == Media::Video   ? "--tx-video "
+                                 : media == Media::Audio ? "--tx-audio "
+                                 : media == Media::Anc   ? "--tx-anc "
+                                                         : "--tx-hbrmt ";
+            result.errors.push_back(option + spec + ": " + error);
             continue;
         }
         if (flow.label.empty()) {
-            flow.label = media == Media::Video ? "Testsender Video" : "Testsender Ton";
+            flow.label = media == Media::Video   ? "Testsender Video"
+                         : media == Media::Audio ? "Testsender Ton"
+                         : media == Media::Anc   ? "Testsender ANC"
+                                                 : "Testsender ST 2022-6";
         }
         o.txFlows.push_back(flow);
     }
@@ -848,6 +864,11 @@ std::string usageText(const std::string& programName) {
         << "                              Karte; braucht PF, PTP und Unterstützung durch Karte und Treiber)\n"
         << "  --tx-queues <n>             Sende-Queues des Sendeports (Vorgabe: 2 je Sender, höchstens 7;\n"
         << "                              die E830 startete mit 9 nicht)\n"
+        << "  --tx-anc <ip:port[,…]>      Testdaten ST 2110-40 (Zeitcode, AFD, Untertitel, Payload-ID; "
+           "Platzhalter);\n"
+        << "                              Schlüssel: format=1920x1080p50 (Bildrate), pt=100, name\n"
+        << "  --tx-hbrmt <ip:port[,…]>    Test-SDI nach ST 2022-6 (SD 625, 25 Hz; Platzhalterdaten); "
+           "Schlüssel: pt=98, name\n"
         << "  --tx-video <ip:port[,…]>    Testbild (Farbbalken, laufendes Quadrat, Sekunden-Blitz);\n"
         << "                              Schlüssel: format, pt, name, start-vrx (Vorlauf in Paketen, 0 = "
            "automatisch)\n"

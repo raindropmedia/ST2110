@@ -124,7 +124,7 @@ horizontales Scrollen.
 - Erste Messung auf Hardware, Abgleich mit EBU LIST (Prüffragen in `docs/MESSUNGEN.md`).
 - PF- gegen VF-Betrieb (MTL bevorzugt VFs, das eingebaute PTP braucht die PF).
 - MTL liefert keine Grandmaster-Kennung, Domäne oder Pfadverzögerung; dafür ggf. `pmc` (linuxptp) im VF-Betrieb.
-- ST 2110-40 (Zusatzdaten), ST 2110-22, NMOS und pcap-Mitschnitt fehlen; die Erkennung meldet -40 nur als
-  „Zusatzdaten“.
+- ST 2110-22, NMOS und pcap-Mitschnitt fehlen. ST 2110-40 und ST 2022-6 (Empfang und Testsender) sind gebaut und in der
+  Demo geprüft, aber noch nicht auf Hardware (ADR 0008).
 - Erkennung an einem echten Spiegelport mit mehreren Video-Flows prüfen (Rahmenverluste beim Mitlesen).
 - Web-Oberfläche ohne Anmeldung.

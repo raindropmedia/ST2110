@@ -262,7 +262,7 @@ bool WebServer::start(const std::string& host, uint16_t port, std::string& error
                             FlowConfig& flow, bool& start, std::string& error) {
         const json body = json::parse(text, nullptr, false);
         if (body.is_discarded() || !body.is_object() || !body.contains("spec") || !body["spec"].is_string()) {
-            error = "Erwartet {\"kind\": \"video\"|\"audio\", \"spec\": \"ip:port,…\"}.";
+            error = "Erwartet {\"kind\": \"video\"|\"audio\"|\"anc\"|\"hbrmt\", \"spec\": \"ip:port,…\"}.";
             return false;
         }
         Media media = Media::Video;
@@ -270,11 +270,14 @@ bool WebServer::start(const std::string& host, uint16_t port, std::string& error
             media = current->media();
         } else {
             const std::string kind = body.value("kind", "");
-            if (needKind && kind != "video" && kind != "audio") {
-                error = "kind muss video oder audio sein.";
+            if (needKind && kind != "video" && kind != "audio" && kind != "anc" && kind != "hbrmt") {
+                error = "kind muss video, audio, anc oder hbrmt sein.";
                 return false;
             }
-            media = kind == "audio" ? Media::Audio : Media::Video;
+            media = kind == "audio"   ? Media::Audio
+                    : kind == "anc"   ? Media::Anc
+                    : kind == "hbrmt" ? Media::Hbrmt
+                                      : Media::Video;
         }
         start = body.value("start", false);
         return parseFlowSpec(media, body["spec"].get<std::string>(), flow, error);

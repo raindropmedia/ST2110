@@ -180,6 +180,15 @@ struct TxSession : TxBackend::Session {
     FlowConfig flow;
     st20p_tx_handle video = nullptr;
     st30p_tx_handle audio = nullptr;
+    // ST 2110-40: Frame-Ebene; alle Puffer enthalten denselben Inhalt, get_next_frame reicht sie reihum
+    // weiter.
+    st40_tx_handle anc = nullptr;
+    std::vector<uint8_t> ancData;
+    std::atomic<uint16_t> ancNextFrame{0};
+    static constexpr uint16_t kAncFrames = 3;
+    // ST 2022-6: RTP-Passthrough über eine st20-Sitzung auf RTP-Ebene (MTL kennt ST 2022-6 nicht).
+    st20_tx_handle hbrmt = nullptr;
+    mtl_handle mtlHandle = nullptr;
     std::unique_ptr<TestPatternGenerator> pattern;
     std::atomic<bool> stopping{false};
     std::thread thread;
@@ -198,6 +207,14 @@ struct TxSession : TxBackend::Session {
         if (audio != nullptr) {
             st30p_tx_free(audio);
             audio = nullptr;
+        }
+        if (anc != nullptr) {
+            st40_tx_free(anc);
+            anc = nullptr;
+        }
+        if (hbrmt != nullptr) {
+            st20_tx_free(hbrmt);
+            hbrmt = nullptr;
         }
     }
 
@@ -246,6 +263,12 @@ struct TxSession : TxBackend::Session {
             thread = std::thread([this] { videoLoop(); });
             return true;
         }
+        if (flow.anc) {
+            return openAnc(mtl, txPort, error);
+        }
+        if (flow.hbrmt) {
+            return openHbrmt(mtl, txPort, error);
+        }
         const auto& a = *flow.audio;
         struct st30p_tx_ops ops {};
         ops.name = flow.label.c_str();
@@ -276,6 +299,188 @@ struct TxSession : TxBackend::Session {
         }
         thread = std::thread([this] { audioLoop(); });
         return true;
+    }
+
+    // ST 2110-40: Testdaten (Zeitcode, AFD, Untertitel, Payload-ID) in jedem Bild. Die Nutzdaten sind
+    // Platzhalter, keine gültigen Inhalte; DID, SDID, Zeilen und Zeitbezug stimmen. MTL ergänzt Parität,
+    // Prüfsumme und RTP-Aufbau selbst.
+    static int onAncNextFrame(void* priv, uint16_t* next, struct st40_tx_frame_meta*) {
+        auto* self = static_cast<TxSession*>(priv);
+        const uint16_t idx = self->ancNextFrame.load();
+        *next = idx;
+        self->ancNextFrame = static_cast<uint16_t>((idx + 1) % kAncFrames);
+        return 0;
+    }
+
+    bool openAnc(mtl_handle mtl, const std::string& txPort, std::string& error) {
+        const auto& d = *flow.anc;
+        struct st40_tx_ops ops {};
+        ops.name = flow.label.c_str();
+        ops.priv = this;
+        ops.num_port = 1;
+        std::snprintf(ops.port[0], MTL_PORT_MAX_LEN, "%s", txPort.c_str());
+        if (!toIpv4(flow.primary().ip, ops.dip_addr[0])) {
+            error = "Ungültige Zieladresse: " + flow.primary().ip;
+            return false;
+        }
+        ops.udp_port[0] = flow.primary().udpPort;
+        ops.type = ST40_TYPE_FRAME_LEVEL;
+        ops.fps = toMtlFps(d.format.rate);
+        ops.payload_type = d.payloadType;
+        ops.interlaced = d.format.interlaced;
+        ops.framebuff_cnt = kAncFrames;
+        ops.get_next_frame = &TxSession::onAncNextFrame;
+        anc = st40_tx_create(mtl, &ops);
+        if (anc == nullptr) {
+            error = "st40_tx_create fehlgeschlagen (Format, Adresse, Sendeport, keine freie Sende-Queue; "
+                    "Details im "
+                    "MTL-Log).";
+            return false;
+        }
+        struct Item {
+            uint8_t did, sdid;
+            uint16_t line;
+            uint16_t size;
+        };
+        const Item items[] = {
+            {0x41, 0x01, 10, 4}, {0x60, 0x60, 9, 16}, {0x41, 0x05, 11, 8}, {0x61, 0x01, 12, 42}};
+        size_t total = 0;
+        for (const auto& it : items) {
+            total += it.size;
+        }
+        ancData.assign(total, 0);
+        for (size_t i = 0; i < ancData.size(); ++i) {
+            ancData[i] = static_cast<uint8_t>(0x10 + i);
+        }
+        for (uint16_t f = 0; f < kAncFrames; ++f) {
+            auto* frame = static_cast<struct st40_frame*>(st40_tx_get_framebuffer(anc, f));
+            if (frame == nullptr) {
+                error = "st40_tx_get_framebuffer lieferte keinen Puffer.";
+                return false;
+            }
+            uint16_t offset = 0;
+            uint32_t n = 0;
+            for (const auto& it : items) {
+                struct st40_meta& m = frame->meta[n++];
+                m.c = 0;
+                m.line_number = it.line;
+                m.hori_offset = 0;
+                m.s = 0;
+                m.stream_num = 0;
+                m.did = it.did;
+                m.sdid = it.sdid;
+                m.udw_size = it.size;
+                m.udw_offset = offset;
+                offset = static_cast<uint16_t>(offset + it.size);
+            }
+            frame->meta_num = n;
+            frame->data = ancData.data();
+            frame->data_size = static_cast<uint32_t>(ancData.size());
+        }
+        return true;
+    }
+
+    // ST 2022-6: Datagramme mit 1376 Byte Nutzlast (SD-SDI 625 Zeilen, 25 Hz, 4:2:2 10 Bit, Nutzlast mit
+    // Platzhalterdaten). MTL überschreibt im RTP-Passthrough bei Bildwechsel den Zeitstempel; mit
+    // ST20_TX_FLAG_USER_TIMESTAMP bleibt er erhalten. MTL erkennt Bilder am wechselnden RTP-Zeitstempel,
+    // deshalb trägt hier jedes Datagramm eines Bildes denselben Zeitstempel (27 MHz, Bildbeginn) statt eines
+    // eigenen je Datagramm, und CF = 0 (kein Video-Zeitstempel). Die Norm sieht Zeitstempel je Datagramm vor.
+    static int onHbrmtDone(void*) { return 0; }
+
+    bool openHbrmt(mtl_handle mtl, const std::string& txPort, std::string& error) {
+        mtlHandle = mtl;
+        const auto& h = *flow.hbrmt;
+        struct st20_tx_ops ops {};
+        ops.name = flow.label.c_str();
+        ops.priv = this;
+        ops.num_port = 1;
+        std::snprintf(ops.port[0], MTL_PORT_MAX_LEN, "%s", txPort.c_str());
+        if (!toIpv4(flow.primary().ip, ops.dip_addr[0])) {
+            error = "Ungültige Zieladresse: " + flow.primary().ip;
+            return false;
+        }
+        ops.udp_port[0] = flow.primary().udpPort;
+        ops.type = ST20_TYPE_RTP_LEVEL;
+        ops.pacing = ST21_PACING_NARROW;
+        ops.packing = ST20_PACKING_BPM;
+        // Platzhalter für die Taktung: MTL verteilt rtp_frame_total_pkts Pakete auf die Bildzeit.
+        ops.width = 1920;
+        ops.height = 1080;
+        ops.fps = ST_FPS_P25;
+        ops.fmt = ST20_FMT_YUV_422_10BIT;
+        ops.payload_type = h.payloadType;
+        ops.flags = ST20_TX_FLAG_USER_TIMESTAMP;
+        ops.rtp_ring_size = 8192;
+        ops.rtp_frame_total_pkts = kHbrmtDatagrams;
+        ops.rtp_pkt_size = static_cast<uint16_t>(kHbrmtPacketBytes);
+        ops.notify_rtp_done = &TxSession::onHbrmtDone;
+        hbrmt = st20_tx_create(mtl, &ops);
+        if (hbrmt == nullptr) {
+            error = "st20_tx_create (RTP-Passthrough für ST 2022-6) fehlgeschlagen (Adresse, Sendeport, "
+                    "keine freie "
+                    "Sende-Queue; Details im MTL-Log).";
+            return false;
+        }
+        thread = std::thread([this] { hbrmtLoop(); });
+        return true;
+    }
+
+    // Datagramme je Bild (ST 2022-6 Abschnitt 6.5, 625 Zeilen, 864 Samples, 10 Bit 4:2:2) und Paketgröße.
+    static constexpr uint32_t kHbrmtDatagrams = 982;
+    static constexpr size_t kHbrmtPacketBytes = 12 + 8 + 1376;
+
+    void hbrmtLoop() {
+        const double periodNs = 40e6; // 25 Hz
+        const uint32_t pt = flow.hbrmt->payloadType;
+        // Erstes Bild: nächste volle Bildperiode nach der PTP-Zeit; danach zählt der Zeitstempel je Bild
+        // weiter.
+        const uint64_t now = mtl_ptp_read_time(mtlHandle);
+        uint64_t frame = static_cast<uint64_t>(static_cast<double>(now) / periodNs) + 2;
+        uint16_t seq = 0;
+        uint32_t index = 0;
+        uint32_t ts = ticks27(frame, periodNs);
+        while (!stopping) {
+            void* usrptr = nullptr;
+            void* mbuf = st20_tx_get_mbuf(hbrmt, &usrptr);
+            if (mbuf == nullptr) {
+                std::this_thread::sleep_for(std::chrono::microseconds(50));
+                continue;
+            }
+            auto* p = static_cast<uint8_t*>(usrptr);
+            const bool last = index + 1 == kHbrmtDatagrams;
+            p[0] = 0x80; // V=2, P=0, X=0, CC=0
+            p[1] = static_cast<uint8_t>((last ? 0x80 : 0x00) | (pt & 0x7F));
+            p[2] = static_cast<uint8_t>(seq >> 8);
+            p[3] = static_cast<uint8_t>(seq);
+            put32(p + 4, ts);
+            put32(p + 8, 0x32303232); // SSRC (vom Sender frei wählbar)
+            // Nutzdaten-Header: F=1, FRCount, R=2 (UTC), CF=0 | FRAME 0x11 (625), FRATE 0x18 (25 Hz), SAMPLE
+            // 1
+            put32(p + 12, (1u << 27) | (static_cast<uint32_t>(frame & 0xFF) << 16) | (2u << 14));
+            put32(p + 16, (0x11u << 20) | (0x18u << 12) | (0x01u << 8));
+            std::memset(p + 20, static_cast<int>(0x20 + (index & 0x3F)), 1376);
+            st20_tx_put_mbuf(hbrmt, mbuf, static_cast<uint16_t>(kHbrmtPacketBytes));
+            ++seq;
+            if (last) {
+                index = 0;
+                ++frame;
+                ts = ticks27(frame, periodNs);
+            } else {
+                ++index;
+            }
+        }
+    }
+
+    static void put32(uint8_t* at, uint32_t v) {
+        for (int i = 0; i < 4; ++i) {
+            at[i] = static_cast<uint8_t>(v >> (24 - 8 * i));
+        }
+    }
+
+    static uint32_t ticks27(uint64_t frame, double periodNs) {
+        const auto ns = static_cast<uint64_t>(static_cast<long double>(frame) * periodNs);
+        return static_cast<uint32_t>((ns / 1'000'000'000ULL) * 27'000'000ULL +
+                                     (ns % 1'000'000'000ULL) * 27'000'000ULL / 1'000'000'000ULL);
     }
 
     void videoLoop() {

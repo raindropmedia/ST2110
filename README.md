@@ -155,6 +155,14 @@ stammen aus der Momentaufnahme, die `scripts/setup-host.sh bind` vor dem Binden 
 ablegt (auch einzeln mit `setup-host.sh snapshot <pci>`); Diagnosewerte sind dann nicht live. Wer die Live-Werte
 braucht, gibt den Port kurz mit `setup-host.sh unbind` zurück.
 
+**Testsender für ANC und ST 2022-6:** `--tx-anc <ip:port[,format=1920x1080p25,pt=100]>` sendet in jedem Bild vier ANC-Pakete
+(Payload-ID, Zeitcode ATC, AFD, CEA-708) über `st40_tx`; die Nutzdatenwörter sind Platzhalter, DID, SDID, Zeilen und Zeitbezug
+stimmen. `--tx-hbrmt <ip:port[,pt=98]>` sendet SD-SDI (625 Zeilen, 25 Hz, 4:2:2 10 Bit, 982 Datagramme je Bild zu 1376 Byte,
+Platzhalter-Nutzlast) im RTP-Passthrough über `st20_tx`. MTL erkennt Bilder am wechselnden RTP-Zeitstempel: Alle Datagramme eines
+Bildes tragen deshalb denselben 27-MHz-Zeitstempel (die Norm sieht einen je Datagramm vor), und CF = 0 (kein Video-Zeitstempel).
+Beides auch im Tab „Testsender“. Noch nicht auf Hardware geprüft; ob MTL den ST-2022-6-Strom im RTP-Passthrough wie gewünscht
+taktet, zeigt erst der Empfang mit dem eigenen Tab „SDI ST 2022-6“.
+
 **Erkennung:** Im DPDK-Betrieb liest das Programm von selbst auf dem **Verwaltungsport** (Schnittstelle mit der
 Standardroute) alle UDP/RTP-Flows mit und empfängt SAP; `--no-discover` schaltet das ab. Mit IGMP-Snooping im
 Switch sieht der Verwaltungsport nur SAP und selbst abonnierte Gruppen, für eine vollständige Sicht braucht es

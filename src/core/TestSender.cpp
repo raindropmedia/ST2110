@@ -96,7 +96,11 @@ bool TestSender::add(FlowConfig flow, bool startNow, std::string& id, std::strin
         entry = std::make_shared<Entry>();
         entry->id = "t" + std::to_string(nextId_++);
         if (flow.label.empty()) {
-            flow.label = (flow.video ? "Testbild " : "Testton ") + entry->id;
+            flow.label = std::string(flow.video   ? "Testbild "
+                                     : flow.audio ? "Testton "
+                                     : flow.anc   ? "Testdaten "
+                                                  : "Test-SDI ") +
+                         entry->id;
         }
         entry->flow = std::move(flow);
         entries_.push_back(entry);
@@ -119,8 +123,8 @@ bool TestSender::update(const std::string& id, FlowConfig flow, std::string& err
         error = "Einstellungen lassen sich nur ändern, solange der Sender gestoppt ist.";
         return false;
     }
-    if (flow.video.has_value() != entry->flow.video.has_value()) {
-        error = "Video und Ton lassen sich nicht umwandeln: Eintrag löschen und neu anlegen.";
+    if (flow.media() != entry->flow.media()) {
+        error = "Die Art des Senders lässt sich nicht ändern: Eintrag löschen und neu anlegen.";
         return false;
     }
     if (!validate(flow, id, error)) {
@@ -260,7 +264,7 @@ nlohmann::json TestSender::toJson() const {
     for (const auto& info : list()) {
         const auto& f = info.flow;
         json item{{"id", info.id},
-                  {"kind", f.video ? "video" : "audio"},
+                  {"kind", f.kind()},
                   {"label", f.label},
                   {"format", f.formatName()},
                   {"ip", f.primary().ip},
@@ -275,6 +279,11 @@ nlohmann::json TestSender::toJson() const {
                                  {"rate", frameRateName(v.rate)},
                                  {"interlaced", v.interlaced},
                                  {"startVrx", f.video->startVrx}};
+        } else if (f.anc) {
+            item["anc"] =
+                json{{"rate", frameRateName(f.anc->format.rate)}, {"interlaced", f.anc->format.interlaced}};
+        } else if (f.hbrmt) {
+            item["hbrmt"] = json{{"frame", "SD 625, 25 Hz, 4:2:2 10 Bit"}, {"datagramsPerFrame", 982}};
         } else {
             const auto& a = f.audio->format;
             item["audio"] = json{{"sampleRate", a.sampleRate},
