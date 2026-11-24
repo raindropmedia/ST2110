@@ -7,8 +7,12 @@ namespace st2110 {
 
 int packetsPerFrame(const VideoFormat& format) {
     const double lines = format.interlaced ? format.height / 2.0 : format.height;
-    const double bytes = format.width * lines * 2.5; // 4:2:2 10 Bit: 5 Byte je 2 Pixel
-    return static_cast<int>(std::ceil(bytes / 1200.0));
+    const double bytes =
+        format.width * lines * format.pixel.bytesPerPixel(); // 4:2:2 10 Bit: 5 Byte je 2 Pixel
+    // Nutzdaten je Paket: höchstens 1200 Byte in ganzen Pixelgruppen (4:2:2 10 Bit: genau 1200)
+    const uint32_t group = format.pixel.pgroupBytes();
+    const double perPacket = static_cast<double>(std::max<uint32_t>(1, 1200 / group) * group);
+    return static_cast<int>(std::ceil(bytes / perPacket));
 }
 
 SyntheticSender::SyntheticSender(const VideoFormat& video, const AudioFormat& audio, uint64_t seed)

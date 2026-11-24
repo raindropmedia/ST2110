@@ -771,6 +771,17 @@
 
   function addrText(a) { return a ? `${a.ip}:${a.udpPort}` : '–'; }
 
+  // Hinweise zur Erkennung: gleiche Pixelgruppe bei mehreren Formaten, Packmodus
+  function discoveredPixelNote(f) {
+    if (f.kind !== 'video') return '';
+    const parts = [];
+    if (f.pixelCandidates && f.pixelCandidates.length > 1) {
+      parts.push('oder ' + f.pixelCandidates.slice(1).map(c => c.name).join(', ') + ' (gleiche Pixelgruppe)');
+    }
+    if (f.packing) parts.push(f.packingCertain ? f.packing : f.packing + ' (oder GPM)');
+    return parts.length ? `<span class="sub">${esc(parts.join(' · '))}</span>` : '';
+  }
+
   function renderFlows() {
     const d = state.flowsData;
     if (!d) return;
@@ -812,7 +823,7 @@
           `<button class="btn small" data-action="monitor" data-index="${d.discovered.indexOf(f)}" ${can ? '' : 'disabled title="Art wird nicht unterstützt"'}>Überwachen</button>`;
         return `<tr class="${f.active ? '' : 'inactive'}"><td><span class="dot ${f.active ? 'ok' : ''}"></span></td>
           <td class="mono">${esc(f.dstIp)}:${f.dstPort}</td><td class="mono">${esc(f.srcIp)}:${f.srcPort}</td>
-          <td><span class="tag ${f.kind}">${kindLabel[f.kind] || f.kind}</span></td><td class="mono">${esc(f.format || '–')}</td>
+          <td><span class="tag ${f.kind}">${kindLabel[f.kind] || f.kind}</span></td><td class="mono">${esc(f.format || '–')}${discoveredPixelNote(f)}</td>
           <td class="num">${f.payloadType ?? '–'}</td><td class="mono">${f.ssrc !== null ? '0x' + f.ssrc.toString(16).padStart(8, '0') : '–'}</td>
           <td class="num">${mbit(f.bps)}</td><td class="num">${fmt(f.pps, 0)}</td>
           <td class="num">${fmt(f.sequenceErrors, 0)}</td><td class="num">${f.dscp}</td><td class="num">${f.vlan ?? '–'}</td>
@@ -1364,7 +1375,8 @@
     if (f.source.value.trim()) spec.push('source=' + f.source.value.trim());
     if (f.redSource.value.trim()) spec.push('red-source=' + f.redSource.value.trim());
     if (kind === 'video' || kind === 'anc') spec.push('format=' + f.videoFormat.value.trim());
-    else if (kind === 'audio') { spec.push('format=' + f.audioFormat.value.trim()); spec.push('ptime=' + f.ptime.value); }
+    if (kind === 'video') spec.push('sampling=' + f.sampling.value, 'depth=' + f.depth.value, 'packing=' + f.packing.value);
+    if (kind === 'audio') { spec.push('format=' + f.audioFormat.value.trim()); spec.push('ptime=' + f.ptime.value); }
     if (f.pt.value) spec.push('pt=' + f.pt.value);
     if (f.name.value.trim()) spec.push('name=' + f.name.value.trim().replace(/,/g, ' '));
     postFlow({ kind, spec: spec.join(',') });
@@ -1393,7 +1405,12 @@
       if (!f) return;
       const prefill = { kind: f.kind, address: `${f.dstIp}:${f.dstPort}`, source: f.multicast ? f.srcIp : '',
                         name: `${kindLabel[f.kind] || 'Flow'} ${f.dstIp}`, pt: f.payloadType, red: '', redSource: '' };
-      if (f.kind === 'video' && f.format) prefill.videoFormat = f.format;
+      if (f.kind === 'video' && f.format) prefill.videoFormat = f.format.split(' ')[0];
+      if (f.kind === 'video' && f.pixelCandidates && f.pixelCandidates.length) {
+        prefill.sampling = f.pixelCandidates[0].sampling;
+        prefill.depth = String(f.pixelCandidates[0].depth);
+      }
+      if (f.kind === "video" && f.packing) prefill.packing = f.packing;
       if (f.kind === 'audio' && f.format) {
         const [enc, pt] = f.format.split(' ');
         prefill.audioFormat = enc;
@@ -1414,6 +1431,9 @@
   function renderPreviewCards(s) {
     const kind = s.flow ? s.flow.kind : null;
     $('videoPreviewCard').hidden = kind !== 'video';
+    if (kind === 'video' && s.video && s.video.pixelFormat && !s.video.pixelFormat.previewSupported) {
+      $('previewOverlay').textContent = `Vorschau nur für YCbCr-4:2:2 10 Bit (Flow: ${s.video.pixelFormat.name})`;
+    }
     $('audioPreviewCard').hidden = kind !== 'audio';
     $('noPreview').hidden = !!kind;
     const key = `${state.tab}|${state.flowId}|${kind}`;

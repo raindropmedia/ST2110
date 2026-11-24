@@ -55,9 +55,9 @@ TEST_CASE("Kenngrößen 1080i59.94 und 2160p59.94") {
 }
 
 TEST_CASE("Paketzahl je Bild") {
-    CHECK(packetsPerFrame(VideoFormat{1920, 1080, FrameRate::P50, false}) == 4320);
-    CHECK(packetsPerFrame(VideoFormat{1920, 1080, FrameRate::P50, true}) == 2160);
-    CHECK(packetsPerFrame(VideoFormat{3840, 2160, FrameRate::P50, false}) == 17280);
+    CHECK(packetsPerFrame(VideoFormat{1920, 1080, FrameRate::P50, false, PixelFormat{}}) == 4320);
+    CHECK(packetsPerFrame(VideoFormat{1920, 1080, FrameRate::P50, true, PixelFormat{}}) == 2160);
+    CHECK(packetsPerFrame(VideoFormat{3840, 2160, FrameRate::P50, false, PixelFormat{}}) == 17280);
 }
 
 TEST_CASE("Urteil folgt der Reihenfolge von MTL") {
@@ -86,7 +86,7 @@ TEST_CASE("Urteil folgt der Reihenfolge von MTL") {
 }
 
 TEST_CASE("Idealer Sender ist narrow, Paketzahl wird gelernt") {
-    const VideoFormat format{1920, 1080, FrameRate::P50, false};
+    const VideoFormat format{1920, 1080, FrameRate::P50, false, PixelFormat{}};
     VideoPacketAnalyzer analyzer(format.height, format.interlaced, format.rate);
     auto frames = run(format, SenderFaults{}, 6, analyzer);
     REQUIRE(analyzer.params());
@@ -110,7 +110,7 @@ TEST_CASE("Idealer Sender ist narrow, Paketzahl wird gelernt") {
 }
 
 TEST_CASE("Bündel ergeben wide, späte Pakete failed") {
-    const VideoFormat format{1920, 1080, FrameRate::P50, false};
+    const VideoFormat format{1920, 1080, FrameRate::P50, false, PixelFormat{}};
     SUBCASE("Bündel zu 8 Paketen") {
         VideoPacketAnalyzer analyzer(format.height, format.interlaced, format.rate);
         analyzer.setPacketsPerFrame(4320);
@@ -135,7 +135,7 @@ TEST_CASE("Bündel ergeben wide, späte Pakete failed") {
 }
 
 TEST_CASE("Intervall-Histogramme werden geleert, Gesamtwerte bleiben") {
-    const VideoFormat format{1280, 720, FrameRate::P50, false};
+    const VideoFormat format{1280, 720, FrameRate::P50, false, PixelFormat{}};
     VideoPacketAnalyzer analyzer(format.height, format.interlaced, format.rate);
     analyzer.setPacketsPerFrame(packetsPerFrame(format));
     run(format, SenderFaults{}, 2, analyzer);

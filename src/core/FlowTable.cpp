@@ -1,13 +1,12 @@
 #include "core/FlowTable.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 
 namespace st2110 {
 namespace {
 
-// Bekannte Breiten für die Formatschätzung aus Bytes je Zeile.
-constexpr std::array<uint32_t, 7> kWidths{720, 1280, 1440, 1920, 2048, 3840, 4096};
 constexpr std::array<double, 5> kClocks{90000, 48000, 96000, 44100, 27000000};
 
 // Nächstliegende Bildrate; 59,94 und 60 liegen nur 0,1 % auseinander, daher der genaue Wert aus
@@ -108,12 +107,39 @@ void FlowTable::observe(const PacketInfo& p, double now, uint32_t count, uint64_
             e.clockRefTime = now;
         }
         if (p.rfc4175) {
+            if (p.segments > 1) {
+                e.sawMultiSegment = true;
+            }
+            // Zwei aufeinanderfolgende Einzelsegmente derselben Zeile: Bildpunkte = Versatzdifferenz, Bytes =
+            // Länge
+            if (p.segments == 1 && e.hasPrevSegment && e.prevRow == p.row &&
+                e.prevSecondField == p.secondField && p.rowOffset > e.prevOffset) {
+                const uint32_t pixels = p.rowOffset - e.prevOffset;
+                const auto& all = allPixelFormats();
+                for (size_t i = 0; i < all.size(); ++i) {
+                    const uint32_t cover = all[i].pgroupPixels();
+                    if (pixels % cover == 0 && e.prevLength == pixels / cover * all[i].pgroupBytes()) {
+                        ++e.pgroupHits[i];
+                    }
+                }
+                ++e.pgroupSamples;
+            }
+            e.hasPrevSegment = p.segments == 1;
+            e.prevRow = p.row;
+            e.prevOffset = p.rowOffset;
+            e.prevLength = p.firstLength;
+            e.prevSecondField = p.secondField;
             e.rfcPackets += count;
             e.maxRow = std::max(e.maxRow, p.row);
             e.sawSecondField = e.sawSecondField || p.secondField;
             e.fieldBytes += static_cast<uint64_t>(p.videoBytes) * count;
         }
         if (p.marker) {
+            if (p.rfc4175) {
+                e.endRow = p.lastRow;
+                e.endOffset = p.lastOffset;
+                e.endLength = p.lastLength;
+            }
             ++e.markers;
             ++e.windowMarkers;
             e.lastFieldBytes = e.fieldBytes;
@@ -168,28 +194,60 @@ void FlowTable::classify(Entry& e) const {
     if (f.clockRate == 90000 || (f.clockRate == 0 && mostlyRfc)) {
         if (mostlyRfc) {
             f.kind = "video";
-            if (e.maxRow > 0 && f.markersPerSec > 0) {
+            f.pixelCandidates.clear();
+            f.packing = std::nullopt;
+            f.packingCertain = false;
+            if (mostlyRfc) {
+                f.packing = e.sawMultiSegment ? Packing::Gpm : Packing::Bpm;
+                f.packingCertain = e.sawMultiSegment;
+            }
+            // Pixelformat: Formate, deren Pixelgruppe zu (fast) allen Segmenten passt; Reihenfolge nach
+            // Häufigkeit
+            if (e.pgroupSamples >= 8) {
+                static const std::array<PixelFormat, 16> kPreference{{
+                    {Sampling::Ycbcr422, 10},
+                    {Sampling::Ycbcr422, 8},
+                    {Sampling::Rgb, 8},
+                    {Sampling::Ycbcr444, 8},
+                    {Sampling::Ycbcr422, 12},
+                    {Sampling::Rgb, 10},
+                    {Sampling::Ycbcr444, 10},
+                    {Sampling::Rgb, 12},
+                    {Sampling::Ycbcr444, 12},
+                    {Sampling::Ycbcr420, 8},
+                    {Sampling::Ycbcr420, 10},
+                    {Sampling::Ycbcr420, 12},
+                    {Sampling::Ycbcr420, 16},
+                    {Sampling::Ycbcr422, 16},
+                    {Sampling::Rgb, 16},
+                    {Sampling::Ycbcr444, 16},
+                }};
+                const auto& all = allPixelFormats();
+                for (const auto& pf : kPreference) {
+                    const size_t index =
+                        static_cast<size_t>(std::find(all.begin(), all.end(), pf) - all.begin());
+                    if (e.pgroupHits[index] * 10 >= e.pgroupSamples * 9) {
+                        f.pixelCandidates.push_back(pf);
+                    }
+                }
+            }
+            if (!f.pixelCandidates.empty() && e.maxRow > 0 && f.markersPerSec > 0 && e.endLength > 0) {
+                const PixelFormat pf = f.pixelCandidates.front();
                 VideoFormat v;
+                v.pixel = pf;
                 v.interlaced = e.sawSecondField;
                 const uint32_t lines = static_cast<uint32_t>(e.maxRow) + 1;
                 v.height = v.interlaced ? lines * 2 : lines;
+                // Breite: Ende des letzten Segments der letzten Zeile (Bytes / Bytes je Bildpunkt)
+                const double bpp = pf.bytesPerPixel();
+                v.width = static_cast<uint32_t>(std::lround(e.endOffset + e.endLength / bpp));
                 const double hz = e.tickCount > 0 ? 90000.0 * static_cast<double>(e.tickCount) /
                                                         static_cast<double>(e.tickSum)
                                                   : f.markersPerSec;
                 auto rate = rateFromHz(hz);
-                if (e.lastFieldBytes > 0 && rate) {
-                    const double width = static_cast<double>(e.lastFieldBytes) / (lines * 2.5);
-                    uint32_t best = 0;
-                    for (uint32_t w : kWidths) {
-                        if (std::fabs(width - w) / w < 0.02) {
-                            best = w;
-                        }
-                    }
-                    if (best != 0) {
-                        v.width = best;
-                        v.rate = *rate;
-                        f.video = v;
-                    }
+                if (rate && v.width >= 64 && v.width % pf.pgroupPixels() == 0) {
+                    v.rate = *rate;
+                    f.video = v;
                 }
             }
         } else if (f.pps < 2000) {
@@ -256,6 +314,18 @@ nlohmann::json discoveredFlowToJson(const DiscoveredFlow& f, double now, const s
         {"dscp", f.dscp},
         {"kind", f.kind},
         {"format", f.formatGuess().empty() ? json(nullptr) : json(f.formatGuess())},
+        {"pixelFormat", f.pixelCandidates.empty() ? json(nullptr) : json(f.pixelCandidates.front().name())},
+        {"pixelCandidates",
+         [&] {
+             json list = json::array();
+             for (const auto& pf : f.pixelCandidates) {
+                 list.push_back(
+                     json{{"sampling", pf.sdpSampling()}, {"depth", pf.depth}, {"name", pf.name()}});
+             }
+             return list;
+         }()},
+        {"packing", f.packing ? json(packingName(*f.packing)) : json(nullptr)},
+        {"packingCertain", f.packingCertain},
         {"rtp", f.rtp},
         {"payloadType", f.rtp ? json(f.payloadType) : json(nullptr)},
         {"ssrc", f.rtp ? json(f.ssrc) : json(nullptr)},

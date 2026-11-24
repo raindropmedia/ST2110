@@ -4,6 +4,7 @@
 #include "core/PacketParser.h"
 #include "core/Sdp.h"
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -44,6 +45,13 @@ struct DiscoveredFlow {
     std::string kind = "udp"; // video | audio | anc | ptp | sap | rtp | udp
     std::optional<VideoFormat> video;
     std::optional<AudioFormat> audio;
+    // ST 2110-20: alle Pixelformate, die zu den gemessenen Bytes je Bildpunkt passen (Formate mit gleicher
+    // Pixelgruppe sind auf der Leitung nicht zu unterscheiden, z. B. YCbCr 4:4:4 und RGB), in der Reihenfolge
+    // der Häufigkeit; und der Packmodus (GPM sicher, wenn ein Paket mehrere Zeilensegmente trägt, sonst BPM
+    // oder GPM).
+    std::vector<PixelFormat> pixelCandidates;
+    std::optional<Packing> packing;
+    bool packingCertain = false;
 
     std::string formatGuess() const;
 };
@@ -80,6 +88,20 @@ class FlowTable {
         bool sawSecondField = false;
         uint64_t fieldBytes = 0;
         uint64_t lastFieldBytes = 0;
+        // Pixelgruppe: Verträglichkeit der Segmentlängen mit jedem der 16 Formate (aufeinanderfolgende Pakete
+        // einer Zeile liefern Bytes und Bildpunkte je Segment)
+        std::array<uint32_t, 16> pgroupHits{};
+        uint32_t pgroupSamples = 0;
+        bool hasPrevSegment = false;
+        uint16_t prevRow = 0;
+        uint16_t prevOffset = 0;
+        uint16_t prevLength = 0;
+        bool prevSecondField = false;
+        bool sawMultiSegment = false;
+        // letztes Segment des letzten Pakets mit Marker: Ende der letzten Zeile
+        uint16_t endRow = 0;
+        uint16_t endOffset = 0;
+        uint16_t endLength = 0;
         // Takte je Bild bzw. Halbbild aus aufeinanderfolgenden Markern
         bool hasMarkerTs = false;
         uint32_t lastMarkerTs = 0;

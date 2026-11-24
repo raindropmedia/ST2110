@@ -32,6 +32,13 @@ struct PacketInfo {
     bool secondField = false;
     uint16_t rowOffset = 0;
     uint32_t videoBytes = 0;
+    // Zeilensegmente des Pakets: Anzahl (mehrere = GPM, Segment setzt sich in der nächsten Zeile fort), Länge
+    // des ersten sowie Zeile, Versatz und Länge des letzten Segments.
+    uint8_t segments = 0;
+    uint16_t firstLength = 0;
+    uint16_t lastRow = 0;
+    uint16_t lastOffset = 0;
+    uint16_t lastLength = 0;
 };
 
 // Ethernet-Rahmen (mit optionalem VLAN-Tag). captured: vorhandene Bytes, wireLength: Länge auf der

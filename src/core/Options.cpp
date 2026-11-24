@@ -225,11 +225,31 @@ bool parseFlowSpec(Media media, const std::string& text, FlowConfig& flow, std::
                                       : media == Media::Audio ? audio.payloadType
                                       : media == Media::Anc   ? anc.payloadType
                                                               : hbrmt.payloadType);
+        } else if (key == "sampling" && media == Media::Video) {
+            auto s = parseSampling(value);
+            ok = s.has_value();
+            if (ok) {
+                video.format.pixel.sampling = *s;
+            }
+        } else if (key == "depth" && media == Media::Video) {
+            unsigned d = 0;
+            ok = parseUnsigned(value, d) && validDepth(static_cast<int>(d));
+            if (ok) {
+                video.format.pixel.depth = static_cast<int>(d);
+            }
+        } else if (key == "packing" && media == Media::Video) {
+            auto p = parsePacking(value);
+            ok = p.has_value();
+            if (ok) {
+                video.packing = *p;
+            }
         } else if (key == "format" && (media == Media::Video || media == Media::Anc)) {
             auto f = parseVideoFormat(value);
             ok = f.has_value();
             if (ok) {
+                const PixelFormat pixel = video.format.pixel; // sampling/depth stehen schon in der Angabe
                 video.format = *f;
+                video.format.pixel = pixel;
                 anc.format = *f;
             }
         } else if (key == "format" && media == Media::Audio) {
@@ -353,6 +373,7 @@ std::vector<FlowConfig> flowsFromSdp(const std::string& sdpText, std::vector<std
                 video.redundant = fromSdp(*v->redundant);
             }
             video.format = v->format;
+            video.packing = v->packing;
             video.payloadType = static_cast<uint8_t>(v->payloadType);
             flow.video = video;
             flow.label = mediaCount > 1 ? name + " Video" : name;
@@ -411,6 +432,15 @@ void validateFlow(const FlowConfig& flow, std::vector<std::string>& errors,
         }
         if (f.height < 64 || f.height > 8704 || (f.interlaced && f.height % 2 != 0)) {
             errors.push_back(name + ": Höhe muss zwischen 64 und 8704 liegen (bei Zeilensprung gerade).");
+        }
+        // Eine Zeile besteht aus ganzen Pixelgruppen (RFC 4175); 4:2:0 braucht eine gerade Höhe.
+        if (f.width % f.pixel.pgroupPixels() != 0) {
+            errors.push_back(name + ": Breite muss ein Vielfaches von " +
+                             std::to_string(f.pixel.pgroupPixels()) + " sein (Pixelgruppe von " +
+                             f.pixel.name() + ").");
+        }
+        if (f.pixel.sampling == Sampling::Ycbcr420 && f.height % 2 != 0) {
+            errors.push_back(name + ": YCbCr 4:2:0 braucht eine gerade Höhe.");
         }
     } else if (flow.audio) {
         if (auto problem = validateAudioFormat(flow.audio->format); !problem.empty()) {

@@ -560,7 +560,16 @@ json FlowMonitor::videoSnapshot(const SnapshotData& d, double windowSec) const {
                     {"histogram", histogramToJson(d.skew.histogram())},
                     {"series", d.skewSeries.toJson(windowSec, kMaxSeriesPoints)}};
     }
+    const PixelFormat& pf = v.format.pixel;
     return json{{"format", v.format.name()},
+                {"pixelFormat", json{{"sampling", pf.sdpSampling()},
+                                     {"depth", pf.depth},
+                                     {"name", pf.name()},
+                                     {"pgroupBytes", pf.pgroupBytes()},
+                                     {"pgroupPixels", pf.pgroupPixels()},
+                                     {"bytesPerPixel", pf.bytesPerPixel()},
+                                     {"previewSupported", pf.isDefault()}}},
+                {"packing", packingName(v.packing)},
                 {"payloadType", v.payloadType},
                 {"flows", flows},
                 {"frameSource", d.mtlVideoFrames ? "mtl" : "analyzer"},

@@ -133,6 +133,16 @@ sauber (SIGINT). `scripts/install-service.sh --remove` entfernt den Dienst, `/et
 Die Web-Oberfläche hat keine Anmeldung: `--http` an die Verwaltungsadresse binden, nicht an `0.0.0.0`; der
 Verwaltungsport darf nie in `ST2110_BIND_PORTS` stehen.
 
+**Pixelformate nach ST 2110-20:** Video-Flows tragen jetzt Abtastung und Bittiefe: YCbCr 4:2:2, 4:2:0, 4:4:4 und RGB mit 8, 10, 12
+oder 16 Bit (die 16 Formate, die MTL als `st20_fmt` kennt) sowie den Packmodus BPM, GPM oder GPM_SL. In `--video` und in der Oberfläche
+als `sampling=YCbCr-4:2:2|YCbCr-4:2:0|YCbCr-4:4:4|RGB`, `depth=8|10|12|16` und `packing=BPM|GPM|GPM_SL`; aus einer SDP kommen sie aus
+`sampling`, `depth` und `PM`. Nicht dabei sind 16-Bit-Gleitkomma (16f), XYZ, CLYCbCr, ICtCp, Key und Tiefe 14 (MTL kennt sie nicht).
+**Erkennung** im Netz: Aus den Segmenten aufeinanderfolgender Pakete einer Zeile (Länge, Versatz) ergibt sich die Pixelgruppe und daraus
+Abtastung und Tiefe, aus dem Ende der letzten Zeile die Breite, aus der Zeilenzahl die Höhe. Formate mit gleicher Pixelgruppe sind auf der
+Leitung nicht zu trennen (YCbCr 4:4:4 und RGB gleicher Tiefe; 3 Byte je Bildpunkt trifft auf RGB 8, 4:4:4 8, 4:2:2 12 und 4:2:0 16 Bit zu):
+die Oberfläche zeigt das wahrscheinlichste Format und nennt die übrigen. Der Packmodus ist nur dann sicher (GPM), wenn ein Paket mehrere
+Zeilensegmente trägt, sonst „BPM (oder GPM)“. Die Vorschau rechnet nur YCbCr 4:2:2 mit 10 Bit um.
+
 **Weitere Flow-Arten:** `--anc <ip:port[,…]>` überwacht Zusatzdaten nach ST 2110-40 (Tab „Zusatzdaten ST 2110-40“: Zählung je
 DID/SDID mit Namen, Zeilen, RTP-Zeitstempelschritt, Zeitbezug zur PTP-Zeit, Verluste, letztes Bild; über `st40_rx` von
 MTL), `--hbrmt <ip:port[,…]>` SDI über IP nach ST 2022-6 (Tab „SDI ST 2022-6“: Nutzdaten-Header nach Abschnitt 6.4 mit

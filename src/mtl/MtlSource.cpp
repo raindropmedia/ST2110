@@ -53,6 +53,51 @@ enum st_fps toMtlFps(FrameRate rate) {
     return ST_FPS_MAX;
 }
 
+// Transportformat nach ST 2110-20 (RFC 4175) für Abtastung und Tiefe.
+enum st20_fmt toMtlFmt(const PixelFormat& pf) {
+    struct Row {
+        Sampling s;
+        int d;
+        enum st20_fmt fmt;
+    };
+    static const Row rows[] = {
+        {Sampling::Ycbcr422, 8, ST20_FMT_YUV_422_8BIT},
+        {Sampling::Ycbcr422, 10, ST20_FMT_YUV_422_10BIT},
+        {Sampling::Ycbcr422, 12, ST20_FMT_YUV_422_12BIT},
+        {Sampling::Ycbcr422, 16, ST20_FMT_YUV_422_16BIT},
+        {Sampling::Ycbcr420, 8, ST20_FMT_YUV_420_8BIT},
+        {Sampling::Ycbcr420, 10, ST20_FMT_YUV_420_10BIT},
+        {Sampling::Ycbcr420, 12, ST20_FMT_YUV_420_12BIT},
+        {Sampling::Ycbcr420, 16, ST20_FMT_YUV_420_16BIT},
+        {Sampling::Ycbcr444, 8, ST20_FMT_YUV_444_8BIT},
+        {Sampling::Ycbcr444, 10, ST20_FMT_YUV_444_10BIT},
+        {Sampling::Ycbcr444, 12, ST20_FMT_YUV_444_12BIT},
+        {Sampling::Ycbcr444, 16, ST20_FMT_YUV_444_16BIT},
+        {Sampling::Rgb, 8, ST20_FMT_RGB_8BIT},
+        {Sampling::Rgb, 10, ST20_FMT_RGB_10BIT},
+        {Sampling::Rgb, 12, ST20_FMT_RGB_12BIT},
+        {Sampling::Rgb, 16, ST20_FMT_RGB_16BIT},
+    };
+    for (const auto& r : rows) {
+        if (r.s == pf.sampling && r.d == pf.depth) {
+            return r.fmt;
+        }
+    }
+    return ST20_FMT_YUV_422_10BIT;
+}
+
+enum st20_packing toMtlPacking(Packing p) {
+    switch (p) {
+    case Packing::Gpm:
+        return ST20_PACKING_GPM;
+    case Packing::GpmSl:
+        return ST20_PACKING_GPM_SL;
+    case Packing::Bpm:
+        break;
+    }
+    return ST20_PACKING_BPM;
+}
+
 enum st30_ptime toMtlPtime(PacketTime p) {
     switch (p) {
     case PacketTime::P125us:
@@ -605,8 +650,10 @@ struct FlowSession {
         self->monitor->onVideoFrame(report);
         // Vorschau angefordert: Rahmen an den PreviewWorker, der ihn danach zurückgibt.
         auto& preview = self->monitor->videoPreview();
-        if (self->previewWorker != nullptr && preview.due(self->monitor->clockNow()) &&
-            meta->status != ST_FRAME_STATUS_CORRUPTED && !self->previewBusy.exchange(true)) {
+        // Die Vorschau rechnet nur YCbCr 4:2:2 mit 10 Bit um.
+        if (self->previewWorker != nullptr && self->monitor->config().video->format.pixel.isDefault() &&
+            preview.due(self->monitor->clockNow()) && meta->status != ST_FRAME_STATUS_CORRUPTED &&
+            !self->previewBusy.exchange(true)) {
             self->previewWorker->push({self, frame, meta->frame_total_size, meta->width, meta->height});
             return 0;
         }
@@ -908,7 +955,8 @@ struct MtlSource::Impl {
             ops.height = v.format.height;
             ops.fps = toMtlFps(v.format.rate);
             ops.interlaced = v.format.interlaced;
-            ops.fmt = ST20_FMT_YUV_422_10BIT;
+            ops.fmt = toMtlFmt(v.format.pixel);
+            ops.packing = toMtlPacking(v.packing);
             ops.payload_type = v.payloadType;
             ops.framebuff_cnt = 4; // einer kann kurz beim PreviewWorker liegen
             ops.notify_frame_ready = &FlowSession::onVideoFrame;

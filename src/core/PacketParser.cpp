@@ -47,6 +47,7 @@ void parseRtp(const uint8_t* p, size_t captured, PacketInfo& out) {
     size_t used = 2;
     uint32_t bytes = 0;
     bool first = true;
+    uint8_t segments = 0;
     for (int i = 0; i < 8 && avail >= 6; ++i) {
         const uint16_t length = be16(q);
         const uint16_t fieldRow = be16(q + 2);
@@ -58,8 +59,13 @@ void parseRtp(const uint8_t* p, size_t captured, PacketInfo& out) {
             out.secondField = (fieldRow & 0x8000) != 0;
             out.row = fieldRow & 0x7FFF;
             out.rowOffset = contOffset & 0x7FFF;
+            out.firstLength = length;
             first = false;
         }
+        out.lastRow = fieldRow & 0x7FFF;
+        out.lastOffset = contOffset & 0x7FFF;
+        out.lastLength = length;
+        ++segments;
         bytes += length;
         used += 6;
         q += 6;
@@ -72,6 +78,7 @@ void parseRtp(const uint8_t* p, size_t captured, PacketInfo& out) {
     if (!first && used + bytes <= out.rtpPayload && out.rtpPayload - (used + bytes) < 16 && out.row < 8704) {
         out.rfc4175 = true;
         out.videoBytes = bytes;
+        out.segments = segments;
     }
 }
 

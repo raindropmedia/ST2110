@@ -31,6 +31,8 @@ struct VideoFlow {
     std::optional<FlowAddress> redundant;
     VideoFormat format;
     uint8_t payloadType = 96;
+    // Packmodus des Senders (SDP PM=2110BPM/2110GPM); MTL muss ihn beim Empfang kennen.
+    Packing packing = Packing::Bpm;
     // Nur Testsender: Vorlauf des ersten Pakets in Paketzeiten vor TR_OFFSET (MTL start_vrx), 0 = MTL wählt
     // selbst (bei Ratenbegrenzung narrow − 4). Schlüssel start-vrx.
     uint16_t startVrx = 0;
@@ -93,7 +95,8 @@ struct FlowConfig {
 };
 
 // Beschreibung eines Flows wie auf der Kommandozeile: "ip:port[,schlüssel=wert…]".
-// Video: red, format, pt, source, red-source, name. Ton: red, format (L24/48000/2), ptime, pt, source,
+// Video: red, format, sampling (YCbCr-4:2:2 …, RGB), depth (8, 10, 12, 16), packing (BPM, GPM, GPM_SL), pt,
+// source, red-source, name. Ton: red, format (L24/48000/2), ptime, pt, source,
 // red-source, name. Zusatzdaten (ST 2110-40): red, format (nur Bildrate und Zeilensprung zählen, z. B.
 // 1920x1080p50), pt, source, red-source, name. ST 2022-6: red, pt, source, red-source, name. Liefert false
 // und eine Fehlermeldung bei ungültigen Angaben.

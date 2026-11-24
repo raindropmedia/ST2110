@@ -27,6 +27,7 @@ add_library(st2110_core STATIC
     src/core/MonitorHub.cpp
     src/core/NetworkInfo.cpp
     src/core/PacketParser.cpp
+    src/core/PixelFormat.cpp
     src/core/Preview.cpp
     src/core/Options.cpp
     src/core/PtpMonitor.cpp

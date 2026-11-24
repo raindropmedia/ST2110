@@ -2,6 +2,7 @@
 
 #include "core/AudioFormat.h"
 #include "core/FrameRate.h"
+#include "core/PixelFormat.h"
 
 #include <cstdint>
 #include <map>
@@ -42,7 +43,8 @@ struct VideoFormat {
     uint32_t height = 1080;
     FrameRate rate = FrameRate::P50;
     bool interlaced = false;
-    std::string name() const; // "1920x1080p50"
+    PixelFormat pixel;        // Abtastung und Tiefe; Vorgabe YCbCr 4:2:2, 10 Bit
+    std::string name() const; // "1920x1080p50", bei anderem Pixelformat mit Zusatz " RGB 12 Bit"
 };
 
 // "1920x1080p50", "1920x1080i50", "1280x720p59.94"
@@ -59,6 +61,7 @@ struct SdpVideo {
     SdpFlow primary;
     std::optional<SdpFlow> redundant;
     VideoFormat format;
+    Packing packing = Packing::Bpm;
     int payloadType = 96;
 };
 

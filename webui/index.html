@@ -81,6 +81,15 @@
             <label>Adresse R (ST 2022-7) <input name="red" placeholder="optional"></label>
             <label>Quelle R <input name="redSource" placeholder="optional"></label>
             <label data-kind="video anc">Format (bei ANC zählen Bildrate und Zeilensprung) <input name="videoFormat" list="videoFormats" value="1920x1080p50"></label>
+            <label data-kind="video">Abtastung
+              <select name="sampling"><option value="YCbCr-4:2:2" selected>YCbCr 4:2:2</option><option value="YCbCr-4:2:0">YCbCr 4:2:0</option><option value="YCbCr-4:4:4">YCbCr 4:4:4</option><option value="RGB">RGB</option></select>
+            </label>
+            <label data-kind="video">Bittiefe
+              <select name="depth"><option value="8">8 Bit</option><option value="10" selected>10 Bit</option><option value="12">12 Bit</option><option value="16">16 Bit</option></select>
+            </label>
+            <label data-kind="video">Packmodus
+              <select name="packing"><option value="BPM" selected>BPM (Block)</option><option value="GPM">GPM (allgemein)</option><option value="GPM_SL">GPM_SL (eine Zeile je Paket)</option></select>
+            </label>
             <label data-kind="audio" hidden>Kodierung <input name="audioFormat" list="audioFormats" value="L24/48000/2"></label>
             <label data-kind="audio" hidden>Paketzeit
               <select name="ptime"><option value="0.125">125 µs</option><option value="0.25">250 µs</option><option value="0.333">333 µs</option><option value="1" selected>1 ms</option><option value="4">4 ms</option></select>

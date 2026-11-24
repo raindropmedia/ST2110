@@ -175,6 +175,12 @@ DemoSource::DemoSource(const Options& options, MonitorHub& hub) : hub_(hub) {
         spec(Media::Audio, "239.100.0.31:30000,format=L24/48000/16,ptime=0.125,name=Saal-Mikrofone"),
         spec(Media::Anc, "239.100.0.23:40000,format=1920x1080p50,pt=100,name=Zusatzdaten Kamera 1"),
         spec(Media::Hbrmt, "239.100.0.40:5004,pt=98,name=SDI-Zuspieler (ST 2022-6)"),
+        spec(Media::Video,
+             "239.100.0.51:20000,format=1920x1080p25,sampling=RGB,depth=12,packing=GPM,name=Grafik RGB"),
+        spec(Media::Video,
+             "239.100.0.52:20000,format=1280x720p50,sampling=YCbCr-4:2:0,depth=8,name=Zuspieler 4:2:0"),
+        spec(Media::Video,
+             "239.100.0.53:20000,format=1920x1080i50,sampling=YCbCr-4:2:2,depth=8,name=Kamera 8 Bit"),
     };
     for (const auto& flow : options.flows) {
         std::string error;
@@ -331,12 +337,41 @@ void DemoSource::discoverVideo(const Generator& g, uint64_t frame, bool redundan
     p.rfc4175 = true;
     p.videoBytes = 1200;
     p.secondField = v.interlaced && (frame % 2 == 1);
-    // erstes Paket stellvertretend für alle außer dem letzten, dann das letzte mit Marker
+    // Wenige echte Pakete der ersten Zeile (für die Erkennung des Pixelformats), der Rest zusammengefasst,
+    // dann das letzte Paket mit Marker am Ende der letzten Zeile.
+    const PixelFormat pf = v.pixel;
+    const uint32_t group = pf.pgroupBytes();
+    const uint32_t bytesPerPacket = std::max<uint32_t>(1, 1200 / group) * group;
+    const uint32_t pixelsPerPacket = bytesPerPacket / group * pf.pgroupPixels();
+    p.rtpPayload = static_cast<uint16_t>(bytesPerPacket + 8);
+    p.videoBytes = bytesPerPacket;
+    p.segments = 1;
+    p.firstLength = static_cast<uint16_t>(bytesPerPacket);
+    p.lastLength = p.firstLength;
     p.sequence = static_cast<uint16_t>(frame * static_cast<uint64_t>(packets));
     p.row = 0;
-    hub_.onDiscoveredPacket(p, static_cast<uint32_t>(packets - 1));
-    p.sequence = static_cast<uint16_t>(p.sequence + packets - 1);
+    const int firstRow = std::min<int>(12, packets - 1);
+    for (int k = 0; k < firstRow; ++k) {
+        p.rowOffset = static_cast<uint16_t>(k * pixelsPerPacket);
+        p.lastRow = p.row;
+        p.lastOffset = p.rowOffset;
+        hub_.onDiscoveredPacket(p, 1);
+        ++p.sequence;
+    }
+    if (g.config.video->packing != Packing::Bpm) {
+        p.segments = 2; // GPM: ein Paket trägt das Zeilenende und den Anfang der nächsten Zeile
+        hub_.onDiscoveredPacket(p, 1);
+        ++p.sequence;
+        p.segments = 1;
+    }
+    if (packets - 1 > firstRow) {
+        hub_.onDiscoveredPacket(p, static_cast<uint32_t>(packets - 1 - firstRow));
+        p.sequence = static_cast<uint16_t>(p.sequence + packets - 1 - firstRow);
+    }
     p.row = static_cast<uint16_t>(lines - 1);
+    p.rowOffset = static_cast<uint16_t>(v.width - pixelsPerPacket);
+    p.lastRow = p.row;
+    p.lastOffset = p.rowOffset;
     p.marker = true;
     hub_.onDiscoveredPacket(p, 1);
 }

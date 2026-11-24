@@ -101,7 +101,7 @@ AncAnalyzer::AncAnalyzer(const VideoFormat& format)
 }
 
 void AncAnalyzer::reset() {
-    *this = AncAnalyzer(VideoFormat{1920, 1080, rate_, interlaced_});
+    *this = AncAnalyzer(VideoFormat{1920, 1080, rate_, interlaced_, PixelFormat{}});
 }
 
 AncAnalyzer::FrameResult AncAnalyzer::add(const AncFrameReport& f, double nowSec) {

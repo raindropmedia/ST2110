@@ -209,7 +209,7 @@ std::optional<SdpSession> parseSdp(const std::string& text, std::string& error) 
 
 std::string VideoFormat::name() const {
     return std::to_string(width) + "x" + std::to_string(height) + (interlaced ? "i" : "p") +
-           frameRateName(rate);
+           frameRateName(rate) + (pixel.isDefault() ? "" : " " + pixel.name());
 }
 
 std::optional<VideoFormat> parseVideoFormat(const std::string& text) {
@@ -274,10 +274,22 @@ std::optional<SdpVideo> sdpVideoFrom(const SdpMedia& media, const SdpMedia* redu
     }
     const std::string sampling = fmtpValue(*p, "sampling");
     const std::string depth = fmtpValue(*p, "depth");
-    if (sampling != "YCbCr-4:2:2" || depth != "10") {
-        error = "Video: nur YCbCr-4:2:2 mit 10 Bit wird unterstützt (SDP: sampling=" + sampling +
-                ", depth=" + depth + ").";
+    const auto parsedSampling = parseSampling(sampling);
+    int depthValue = 0;
+    if (!depth.empty() &&
+        std::all_of(depth.begin(), depth.end(), [](unsigned char c) { return std::isdigit(c); })) {
+        depthValue = std::atoi(depth.c_str());
+    }
+    if (!parsedSampling || !validDepth(depthValue)) {
+        error = "Video: unterstützt werden YCbCr-4:2:2, YCbCr-4:2:0, YCbCr-4:4:4 und RGB mit 8, 10, 12 oder "
+                "16 Bit "
+                "(SDP: sampling=" +
+                sampling + ", depth=" + depth + ").";
         return std::nullopt;
+    }
+    v.format.pixel = PixelFormat{*parsedSampling, depthValue};
+    if (const auto pm = parsePacking(fmtpValue(*p, "pm"))) {
+        v.packing = *pm;
     }
     if (!toNumber(fmtpValue(*p, "width"), v.format.width) ||
         !toNumber(fmtpValue(*p, "height"), v.format.height)) {
