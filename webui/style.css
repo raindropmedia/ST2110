@@ -136,6 +136,8 @@ table.flows .dot.failed, table.flows .dot.error { background: var(--failed); }
 .tag { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); }
 .tag.video { color: #7dd3fc; border-color: #1e4b63; }
 .tag.audio { color: #d8b4fe; border-color: #4c2a6b; }
+.tag.anc { color: #fcd34d; border-color: #6b5320; }
+.tag.hbrmt { color: #86efac; border-color: #1f5b3a; }
 .tag.on { color: #86efac; border-color: #1f5135; }
 .btn.small { padding: 2px 8px; font-size: 12px; }
 .btn.primary { background: #0e3a4d; border-color: #1f6f8f; color: #e0f6ff; }

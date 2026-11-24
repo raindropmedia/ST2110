@@ -31,6 +31,10 @@
 
   // ---------- Hilfsfunktionen ----------
   const verdictLabel = { narrow: 'narrow', wide: 'wide', failed: 'failed' };
+  // ANC und ST 2022-6 kennen kein narrow/wide: ok, Warnung, Fehler (JSON: ok/warn/failed bzw. narrow/wide/failed im Flow-Überblick)
+  const plainVerdict = { ok: 'in Ordnung', warn: 'Warnung', failed: 'Fehler', narrow: 'in Ordnung', wide: 'Warnung' };
+  const plainClass = { ok: 'narrow', warn: 'wide', failed: 'failed', narrow: 'narrow', wide: 'wide' };
+  const isPlainKind = (k) => k === 'anc' || k === 'hbrmt';
   const ptpLabel = { locked: 'eingerastet', syncing: 'nicht eingerastet', nosync: 'kein Sync' };
   const us = (ns) => (ns === null || ns === undefined) ? null : ns / 1000;
 
@@ -155,6 +159,8 @@
       }
       snap.video = f && f.video ? f.video : null;
       snap.audio = f && f.audio ? f.audio : null;
+      snap.anc = f && f.anc ? f.anc : null;
+      snap.hbrmt = f && f.hbrmt ? f.hbrmt : null;
       snap.counters = { video: f && f.kind === 'video' ? f.counters : null, audio: f && f.kind === 'audio' ? f.counters : null };
       updateRates(snap);
       state.snap = snap;
@@ -225,6 +231,8 @@
       case 'txgen': renderTx(); break;
       case 'system': renderSystem(); break;
       case 'overview': renderOverview(s); break;
+      case 'anc': renderAnc(s); break;
+      case 'hbrmt': renderHbrmt(s); break;
       case 'system10': renderSystem10(s); break;
       case 'preview': renderPreviewCards(s); break;
       case 'video': renderVideo(s); break;
@@ -243,6 +251,8 @@
     if (s.flow) parts.push(s.flow.label);
     if (s.video) parts.push(s.video.format);
     if (s.audio) parts.push(s.audio.format);
+    if (s.anc) parts.push('Zusatzdaten ' + s.anc.format);
+    if (s.hbrmt && s.hbrmt.header) parts.push('ST 2022-6 ' + s.hbrmt.header.frameName);
     parts.push(`Laufzeit ${fmtDuration(s.uptimeSec)}`);
     $('subtitle').textContent = parts.join(' · ');
 
@@ -260,6 +270,8 @@
       const v = s.audio.paths[p].verdict;
       chips.push(chip(v || '', `Ton ${p}`, v ? verdictLabel[v] : '–'));
     }
+    if (s.anc) chips.push(chip(s.anc.verdict ? plainClass[s.anc.verdict] : '', 'Zusatzdaten', s.anc.verdict ? plainVerdict[s.anc.verdict] : '–'));
+    if (s.hbrmt) chips.push(chip(s.hbrmt.verdict ? plainClass[s.hbrmt.verdict] : '', 'ST 2022-6', s.hbrmt.verdict ? plainVerdict[s.hbrmt.verdict] : '–'));
     if (s.ptpEnabled || s.demo) {
       const off = s.ptp.lastDeltaNs;
       chips.push(chip(s.ptp.state, 'PTP', `${ptpLabel[s.ptp.state]}${off !== null ? ' · ' + fmt(off, 0) + ' ns' : ''}`));
@@ -414,6 +426,30 @@
   }
 
   // ---------- Video ----------
+  // Je Kriterium: Messwert des letzten Bildes, Grenzen (narrow/wide), Urteil. Rechnung wie im Timing-Parser von MTL.
+  function renderVideoCriteria(f, pass, params) {
+    const table = $('videoCriteria');
+    if (!f || !pass) { table.innerHTML = '<tr><td class="empty">noch kein Bild bzw. Grenzwerte von MTL</td></tr>'; return; }
+    const cls = (ok, wide) => ok ? 'narrow' : wide ? 'wide' : 'failed';
+    const rows = [
+      ['Cinst (Pakete im Netzwerkpuffer, Modell C)', `${fmt(f.cinstMax, 0)} (max)`, `0 … ${pass.cinstMaxNarrow} / ${pass.cinstMaxWide}`,
+       cls(f.cinstMax <= pass.cinstMaxNarrow, f.cinstMax <= pass.cinstMaxWide)],
+      ['VRX (Füllstand Empfangspuffer)', `${fmt(f.vrxMin, 0)} … ${fmt(f.vrxMax, 0)}`, `0 … ${pass.vrxMaxNarrow} / ${pass.vrxMaxWide}`,
+       f.vrxMin < 0 ? 'failed' : cls(f.vrxMax <= pass.vrxMaxNarrow, f.vrxMax <= pass.vrxMaxWide)],
+      ['FPT (erstes Paket gegen Epoche)', `${fmt(us(f.fptNs), 2)} µs`, `< TR_OFFSET ${fmt(pass.trOffsetNs / 1000, 2)} µs`,
+       f.fptNs < pass.trOffsetNs ? 'narrow' : 'failed'],
+      ['Latenz', `${fmt(us(f.latencyNs), 2)} µs`, `${fmt(pass.latencyMinNs / 1000, 0)} … ${fmt(pass.latencyMaxNs / 1000, 0)} µs`,
+       f.latencyNs >= pass.latencyMinNs && f.latencyNs <= pass.latencyMaxNs ? 'narrow' : 'failed'],
+      ['RTP-Offset (Takte, 90 kHz)', fmt(f.rtpOffset, 0), `${pass.rtpOffsetMin} … ${pass.rtpOffsetMax}`,
+       f.rtpOffset >= pass.rtpOffsetMin && f.rtpOffset <= pass.rtpOffsetMax ? 'narrow' : 'failed'],
+      ['RTP-Zeitstempelschritt (Takte)', fmt(f.rtpTsDelta, 0), `${pass.rtpTsDeltaMin} … ${pass.rtpTsDeltaMax}`,
+       f.rtpTsDelta >= pass.rtpTsDeltaMin && f.rtpTsDelta <= pass.rtpTsDeltaMax ? 'narrow' : 'failed'],
+      ['IPT (Paketabstand, nur Anzeige)', `${fmt(us(f.iptMinNs), 3)} … ${fmt(us(f.iptMaxNs), 3)} µs`, params ? `TRS ${fmt(params.trsNs / 1000, 4)} µs` : '', ''],
+    ];
+    table.innerHTML = '<tr><th></th><th>Kriterium</th><th>Messwert (letztes Bild)</th><th>Grenze narrow / wide</th></tr>' +
+      rows.map(r => `<tr><td><span class="dot ${r[3]}"></span></td><td>${esc(r[0])}</td><td class="mono">${esc(r[1])}</td><td class="mono">${esc(r[2])}</td></tr>`).join('');
+  }
+
   function renderVideo(s) {
     if (!s.video) { for (const k of ['iptHist', 'cinstHist', 'vrxHist', 'vCinstVrx', 'vFptLat', 'vRtp', 'vIptMax']) Charts.noData(charts[k], 'kein Video'); return; }
     setSegEnabled('videoPath', 'R', !!s.video.paths.R);
@@ -472,6 +508,7 @@
       ['RTP-Offset min / max', pass ? `${pass.rtpOffsetMin} / ${pass.rtpOffsetMax}` : null],
       ['Latenz max', pass ? fmt(pass.latencyMaxNs / 1000, 0) + ' µs' : null],
     ]);
+    renderVideoCriteria(f, pass, params);
     const t = path.total;
     kv($('videoTotal'), [
       ['Bilder', fmt(t.frames, 0)],
@@ -683,7 +720,7 @@
   }
 
   // ---------- Flows ----------
-  const kindLabel = { video: 'Video', audio: 'Ton', anc: 'Zusatzdaten', ptp: 'PTP', sap: 'SAP', rtp: 'RTP', udp: 'UDP' };
+  const kindLabel = { video: 'Video', audio: 'Ton', anc: 'Zusatzdaten', hbrmt: 'ST 2022-6', ptp: 'PTP', sap: 'SAP', rtp: 'RTP', udp: 'UDP' };
   const order = { failed: 3, wide: 2, narrow: 1 };
 
   function worstVerdict(f) {
@@ -712,14 +749,15 @@
     const kind = s.flow ? s.flow.kind : null;
     const allowed = {
       flows: true, txgen: true, system: true, ptp: true, events: true,
-      system10: !!kind, overview: !!kind, counters: !!kind, redundancy: !!kind, preview: !!kind,
-      video: kind === 'video', profile: kind === 'video', audio: kind === 'audio',
+      system10: !!kind, overview: kind === 'video' || kind === 'audio', counters: kind === 'video' || kind === 'audio',
+      redundancy: kind === 'video' || kind === 'audio', preview: kind === 'video' || kind === 'audio',
+      video: kind === 'video', profile: kind === 'video', audio: kind === 'audio', anc: kind === 'anc', hbrmt: kind === 'hbrmt',
     };
     document.querySelectorAll('#tabs button[data-tab]').forEach(b => {
       b.disabled = !allowed[b.dataset.tab];
       b.title = b.disabled ? (kind ? 'passt nicht zum gewählten Flow' : 'kein Flow gewählt') : '';
     });
-    if (!allowed[state.tab]) showTab(kind ? 'overview' : 'flows');
+    if (!allowed[state.tab]) showTab(kind === 'anc' ? 'anc' : kind === 'hbrmt' ? 'hbrmt' : kind ? 'overview' : 'flows');
   }
 
   async function pollFlows() {
@@ -744,7 +782,7 @@
       (m.length ? m.map(f => {
         const w = worstVerdict(f);
         const rp = f.rates.P, rr = f.rates.R;
-        const v = (p) => f.verdict[p] ? `<span class="verdict ${f.verdict[p]}">${f.verdict[p]}</span>` : '–';
+        const v = (p) => f.verdict[p] ? `<span class="verdict ${f.verdict[p]}">${isPlainKind(f.kind) ? plainVerdict[f.verdict[p]] : f.verdict[p]}</span>` : '–';
         return `<tr class="${f.id === state.flowId ? 'selected' : ''}" data-id="${esc(f.id)}">
           <td><span class="dot ${esc(w || '')}"></span></td><td>${esc(f.label)}</td>
           <td><span class="tag ${f.kind}">${kindLabel[f.kind]}</span></td><td class="mono">${esc(f.format)}</td>
@@ -769,7 +807,7 @@
     $('discoveredTable').innerHTML = `<tr><th></th><th>Ziel</th><th>Quelle</th><th>Art</th><th>Format (geschätzt)</th><th>PT</th>
       <th>SSRC</th><th>Mbit/s</th><th>Pakete/s</th><th>Seq.-Fehler</th><th>DSCP</th><th>VLAN</th><th></th></tr>` +
       (list.length ? list.map((f, i) => {
-        const can = (f.kind === 'video' || f.kind === 'audio') && !f.monitored;
+        const can = ['video', 'audio', 'anc', 'hbrmt'].includes(f.kind) && !f.monitored;
         const status = f.monitored ? `<span class="tag on">überwacht</span>` :
           `<button class="btn small" data-action="monitor" data-index="${d.discovered.indexOf(f)}" ${can ? '' : 'disabled title="Art wird nicht unterstützt"'}>Überwachen</button>`;
         return `<tr class="${f.active ? '' : 'inactive'}"><td><span class="dot ${f.active ? 'ok' : ''}"></span></td>
@@ -965,6 +1003,113 @@
       r.checks.map(c => `<tr><td><span class="dot ${s10Dot[c.verdict] || ''}" title="${esc(s10Label[c.verdict] || '')}"></span></td>
         <td>${esc(c.label)}</td><td class="mono">${esc(c.value)}</td><td class="mono">${esc(c.limit)}</td>
         <td class="wrap note">${esc(c.note || "")}</td></tr>`).join('');
+  }
+
+  // ---------- ST 2110-40 (Zusatzdaten) ----------
+  function checkRows(table, checks) {
+    table.innerHTML = (checks || []).map(c =>
+      `<tr><td><span class="dot ${s10Dot[c.verdict] || ''}" title="${esc(s10Label[c.verdict] || '')}"></span> ${esc(c.label)}</td>
+       <td>${esc(c.value)}${c.limit ? ` <span class="hint">Soll ${esc(c.limit)}</span>` : ''}</td></tr>`).join('');
+  }
+
+  function renderAnc(s) {
+    const a = s.anc;
+    if (!a) {
+      for (const k of ['ancPerFrame', 'ancLatency', 'ancLatHist']) Charts.noData(charts[k], 'kein Zusatzdaten-Flow');
+      return;
+    }
+    const cls = a.verdict ? plainClass[a.verdict] : '';
+    const fr = a.frames;
+    const step = a.rtpStep;
+    const lat = a.latency;
+    $('ancTiles').innerHTML = [
+      tile(cls, `Zusatzdaten · ${a.format}`, a.verdict ? plainVerdict[a.verdict] : '–', [
+        ['Bilder', fmt(fr.total, 0)], ['beschädigt', fmt(fr.corrupted, 0)], ['ohne ANC-Paket', fmt(fr.empty, 0)],
+        ['ohne Marker', fmt(fr.noMarker, 0)], ['Ursache', a.cause || '–']]),
+      tile('', 'ANC-Pakete', fmt(a.ancPackets, 0), [
+        ['je Bild min / Mittel / max', fr.total ? `${fmt(a.perFrame.min, 0)} / ${fmt(a.perFrame.avg, 1)} / ${fmt(a.perFrame.max, 0)}` : '–'],
+        ['RTP-Pakete', fmt(a.rtpPackets, 0)], ['Nutzdatenwörter', fmt(a.udwWords, 0)],
+        ['Pakete fehlen', fmt(a.seqLost, 0)], ['Bilder mit Lücke', fmt(a.seqDiscontFrames, 0)]]),
+      tile(step.errors ? 'warn' : step.last === null ? '' : 'ok', 'RTP-Zeitstempelschritt', step.last === null ? '–' : fmt(step.last, 0), [
+        ['min / max', step.last === null ? '–' : `${fmt(step.min, 0)} / ${fmt(step.max, 0)}`],
+        ['Soll (90 kHz)', step.expectedMin === step.expectedMax ? fmt(step.expectedMin, 0) : `${fmt(step.expectedMin, 0)} / ${fmt(step.expectedMax, 0)}`],
+        ['Abweichungen', fmt(step.errors, 0)]]),
+      tile(lat && lat.warnings ? 'warn' : lat ? 'ok' : '', 'Zeitbezug (erstes Paket)', lat ? fmt(lat.lastUs, 0) + ' µs' : '–', [
+        ['min / Mittel / max', lat ? `${fmt(lat.minUs, 0)} / ${fmt(lat.avgUs, 0)} / ${fmt(lat.maxUs, 0)} µs` : '–'],
+        ['Bildperiode', fmt(a.periodUs, 0) + ' µs'], ['außerhalb einer Periode', lat ? fmt(lat.warnings, 0) : '–']]),
+    ].join('');
+    const se = a.series;
+    Charts.series(charts.ancPerFrame, [{ data: se.ancPerFrame, color: C('--accent'), label: 'ANC-Pakete', use: 'max' }],
+      { window: state.window, yMin: 0 });
+    Charts.series(charts.ancLatency, [{ data: se.latencyUs, color: C('--path-p'), label: 'Zeitbezug', use: 'max' }],
+      { window: state.window, unit: 'µs', markers: [{ y: 0, label: 'Sollzeit', color: C('--ideal') }] });
+    Charts.histogram(charts.ancLatHist, lat ? lat.histogram : null, { unit: 'µs', logY: state.logY, color: C('--path-p'),
+      markers: [{ x: 0, label: 'Sollzeit', color: C('--ideal') }] });
+    checkRows($('ancChecks'), a.system10);
+    $('ancData').innerHTML = '<tr><th>DID</th><th>SDID</th><th>Datenart</th><th>Pakete</th><th>Bilder mit Paket</th><th>max. je Bild</th><th>Zeilen</th><th>Nutzdatenwörter (letztes)</th><th>zuletzt vor</th></tr>' +
+      (a.data.length ? a.data.map(d => `<tr><td class="mono">0x${d.did.toString(16).toUpperCase().padStart(2, '0')}</td>
+        <td class="mono">0x${d.sdid.toString(16).toUpperCase().padStart(2, '0')}</td><td>${esc(d.name || 'unbekannt')}</td>
+        <td class="num">${fmt(d.count, 0)}</td><td class="num">${fmt(d.framesWith, 0)}</td><td class="num">${d.maxPerFrame}</td>
+        <td class="num">${d.minLine === d.maxLine ? d.minLine : d.minLine + '–' + d.maxLine}</td><td class="num">${d.lastUdwWords}</td>
+        <td class="num">${fmt(d.sinceLastSec, 1)} s</td></tr>`).join('') : '<tr><td colspan="9" class="empty">Noch keine ANC-Pakete.</td></tr>');
+    const last = a.last;
+    $('ancLastInfo').textContent = last ? `RTP-Zeitstempel ${last.rtpTimestamp} · ${last.rtpPackets} RTP-Pakete${last.interlaced ? (last.secondField ? ' · Halbbild 2' : ' · Halbbild 1') : ''}` : '';
+    $('ancLast').innerHTML = '<tr><th>DID / SDID</th><th>Datenart</th><th>Zeile</th><th>Offset</th><th>Kanal</th><th>Nutzdatenwörter</th></tr>' +
+      (last && last.anc.length ? last.anc.map(p => `<tr><td class="mono">0x${p.did.toString(16).toUpperCase().padStart(2, '0')} / 0x${p.sdid.toString(16).toUpperCase().padStart(2, '0')}</td>
+        <td>${esc(p.name || 'unbekannt')}</td><td class="num">${p.line}</td><td class="num">${p.horiOffset}</td><td>${p.luma ? 'Luma (Y)' : 'Chroma (C)'}</td>
+        <td class="num">${p.udwWords}</td></tr>`).join('') : '<tr><td colspan="6" class="empty">Das letzte Bild enthielt keine ANC-Pakete.</td></tr>');
+  }
+
+  // ---------- ST 2022-6 ----------
+  function renderHbrmt(s) {
+    const h = s.hbrmt;
+    if (!h) {
+      for (const k of ['hbrmtRate', 'hbrmtDpf']) Charts.noData(charts[k], 'kein ST-2022-6-Flow');
+      return;
+    }
+    const cls = h.verdict ? plainClass[h.verdict] : '';
+    const hd = h.header;
+    const dpf = h.datagramsPerFrame;
+    $('hbrmtTiles').innerHTML = [
+      tile(cls, 'SDI über IP · ST 2022-6', h.verdict ? plainVerdict[h.verdict] : '–', [
+        ['Format', hd ? hd.frameName : '–'], ['Bildrate / Abtastung', hd ? `${hd.rateName} · ${hd.sampleName}` : '–'],
+        ['Ursache', h.cause || '–']]),
+      tile(h.lost ? 'failed' : h.packets ? 'ok' : '', 'Pakete', fmt(h.packets, 0), [
+        ['verloren / vertauscht', `${fmt(h.lost, 0)} / ${fmt(h.reordered, 0)}`],
+        ['Bilder', fmt(h.frames, 0)], ['Datenrate', fmt(h.rate.mbit, 1) + ' Mbit/s'], ['Pakete/s', fmt(h.rate.pps, 0)]]),
+      tile(dpf.expected !== null && dpf.last && dpf.last !== dpf.expected ? 'warn' : dpf.last ? 'ok' : '', 'Datagramme je Bild', dpf.last ? fmt(dpf.last, 0) : '–', [
+        ['min / max', dpf.last ? `${fmt(dpf.min, 0)} / ${fmt(dpf.max, 0)}` : '–'],
+        ['Soll (Abschnitt 6.5)', dpf.expected !== null ? fmt(dpf.expected, 0) : 'unbekanntes Format'],
+        ['Abweichungen', fmt(h.datagramErrors, 0)]]),
+      tile(h.frCountErrors || h.stepErrors ? 'warn' : h.frames ? 'ok' : '', 'Bildfolge', h.rtpStep.last === null ? '–' : fmt(h.rtpStep.last, 0) + ' Takte', [
+        ['RTP-Schritt min / max (27 MHz)', h.rtpStep.last === null ? '–' : `${fmt(h.rtpStep.min, 0)} / ${fmt(h.rtpStep.max, 0)}`],
+        ['FRCount-Fehler', fmt(h.frCountErrors, 0)], ['Schrittfehler', fmt(h.stepErrors, 0)], ['Formatwechsel', fmt(h.formatChanges, 0)]]),
+    ].join('');
+    Charts.series(charts.hbrmtRate, [{ data: h.series.mbit, color: C('--accent'), label: 'Mbit/s', use: 'max' }],
+      { window: state.window, unit: 'Mbit/s', yMin: 0 });
+    Charts.series(charts.hbrmtDpf, [{ data: h.series.datagramsPerFrame, color: C('--path-p'), label: 'Datagramme', use: 'max' }],
+      { window: state.window, yMin: 0, markers: dpf.expected !== null ? [{ y: dpf.expected, label: 'Soll', color: C('--narrow') }] : [] });
+    kv($('hbrmtHeader'), hd ? [
+      ['Ext (Erweiterung)', `${hd.ext} (${hd.headerBytes} Byte Header)`],
+      ['F (Videoformat vorhanden)', hd.f ? 'ja' : 'nein – Norm verlangt 1'],
+      ['VSID', `${hd.vsid} · ${hd.vsidName}`], ['FRCount', hd.frCount],
+      ['R (Zeitbezug)', `${hd.r} · ${hd.referenceName}`], ['S (Scrambling)', hd.s === 0 ? '0 · aus' : String(hd.s)],
+      ['FEC', `${hd.fec} · ${hd.fecName}`], ['CF (Takt Video-Zeitstempel)', `${hd.cf} · ${hd.clockName}`],
+      ['MAP', hd.map], ['FRAME', `0x${hd.frame.toString(16).toUpperCase().padStart(2, '0')} · ${hd.frameName}`],
+      ['FRATE', `0x${hd.frate.toString(16).toUpperCase().padStart(2, '0')} · ${hd.rateName}`],
+      ['SAMPLE', `${hd.sample} · ${hd.sampleName}`],
+      ['Video-Zeitstempel', hd.videoTimestamp === null ? '–' : fmt(hd.videoTimestamp, 0)],
+      ['Payload-Typ', h.payloadType], ['Strom P', flowText(h.flows.P)], ['Strom R', h.flows.R ? flowText(h.flows.R) : null],
+    ] : [['Status', 'noch kein Paket']]);
+    const rows = [
+      { id: 'rtp', label: 'RTP-Header (V=2, P=0, X=0, CC=0)', value: fmt(h.badRtp, 0) + ' Verstöße', verdict: h.badRtp ? 'fail' : 'ok' },
+      { id: 'size', label: 'Nutzlast je Datagramm 1376 Byte', value: fmt(h.badSize, 0) + ' Verstöße', verdict: h.badSize ? 'fail' : 'ok' },
+      { id: 'hdr', label: 'Nutzdaten-Header lesbar, F = 1', value: fmt(h.badHeader, 0) + ' Verstöße', verdict: h.badHeader ? 'fail' : 'ok' },
+      { id: 'pt', label: 'Payload-Typ 98 oder 99', value: fmt(h.badPayloadType, 0) + ' abweichend', verdict: h.badPayloadType ? 'warn' : 'ok' },
+      { id: 'ssrc', label: 'SSRC unverändert', value: fmt(h.ssrcChanges, 0) + ' Wechsel', verdict: h.ssrcChanges ? 'warn' : 'ok' },
+      { id: 'vts', label: 'Video-Zeitstempel gegen RTP-Zeitstempel', value: h.videoTimestampOffset ? `${fmt(h.videoTimestampOffset.min, 0)} … ${fmt(h.videoTimestampOffset.max, 0)} Takte` : 'nicht prüfbar (CF ≠ 27 MHz)', verdict: h.videoTimestampOffset ? (h.videoTimestampOffset.min === h.videoTimestampOffset.max ? 'ok' : 'warn') : 'na' },
+    ];
+    $('hbrmtChecks').innerHTML = rows.map(c => `<tr><td><span class="dot ${s10Dot[c.verdict] || ''}"></span> ${esc(c.label)}</td><td>${esc(c.value)}</td></tr>`).join('');
   }
 
   // ---------- System ----------
@@ -1185,13 +1330,13 @@
   function updateFormKind() {
     const form = $('addFlowForm');
     const kind = form.elements.kind.value;
-    form.querySelectorAll('[data-kind]').forEach(el => { el.hidden = el.dataset.kind !== kind; });
+    form.querySelectorAll('[data-kind]').forEach(el => { el.hidden = !el.dataset.kind.split(' ').includes(kind); });
   }
 
   $('addFlowBtn').addEventListener('click', () => openForm());
   $('addFlowClose').addEventListener('click', () => { $('addFlowCard').hidden = true; });
   $('addFlowForm').elements.kind.addEventListener('change', (e) => {
-    $('addFlowForm').elements.pt.value = e.target.value === 'video' ? 96 : 97;
+    $('addFlowForm').elements.pt.value = { video: 96, audio: 97, anc: 100, hbrmt: 98 }[e.target.value] || 96;
     updateFormKind();
   });
   $('addFlowForm').addEventListener('submit', (e) => {
@@ -1202,8 +1347,8 @@
     if (f.red.value.trim()) spec.push('red=' + f.red.value.trim());
     if (f.source.value.trim()) spec.push('source=' + f.source.value.trim());
     if (f.redSource.value.trim()) spec.push('red-source=' + f.redSource.value.trim());
-    if (kind === 'video') spec.push('format=' + f.videoFormat.value.trim());
-    else { spec.push('format=' + f.audioFormat.value.trim()); spec.push('ptime=' + f.ptime.value); }
+    if (kind === 'video' || kind === 'anc') spec.push('format=' + f.videoFormat.value.trim());
+    else if (kind === 'audio') { spec.push('format=' + f.audioFormat.value.trim()); spec.push('ptime=' + f.ptime.value); }
     if (f.pt.value) spec.push('pt=' + f.pt.value);
     if (f.name.value.trim()) spec.push('name=' + f.name.value.trim().replace(/,/g, ' '));
     postFlow({ kind, spec: spec.join(',') });
@@ -1231,7 +1376,7 @@
       const f = state.flowsData.discovered[+btn.dataset.index];
       if (!f) return;
       const prefill = { kind: f.kind, address: `${f.dstIp}:${f.dstPort}`, source: f.multicast ? f.srcIp : '',
-                        name: `${f.kind === 'video' ? 'Video' : 'Ton'} ${f.dstIp}`, pt: f.payloadType, red: '', redSource: '' };
+                        name: `${kindLabel[f.kind] || 'Flow'} ${f.dstIp}`, pt: f.payloadType, red: '', redSource: '' };
       if (f.kind === 'video' && f.format) prefill.videoFormat = f.format;
       if (f.kind === 'audio' && f.format) {
         const [enc, pt] = f.format.split(' ');

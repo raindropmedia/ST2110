@@ -553,6 +553,10 @@ json HbrmtAnalyzer::system10Checks() const {
                                    "Bildrate unbekannt (FRATE)", "na"));
         }
     }
+    checks.push_back(check("loss", "Paketverlust (Sequenznummern)", std::to_string(lost_), "0",
+                           lost_ == 0 ? "ok" : "fail"));
+    checks.push_back(check("reorder", "Vertauschte Pakete", std::to_string(reordered_), "0",
+                           reordered_ == 0 ? "ok" : "warn", "Paketreihenfolge im Netz geändert."));
     checks.push_back(check("pt-hbrmt", "Payload-Typ ST 2022-6", std::to_string(ptSeen_),
                            "98 (27 MHz) oder 99 (FEC)", (ptSeen_ == 98 || ptSeen_ == 99) ? "ok" : "warn"));
     if (haveVts_) {

@@ -47,6 +47,8 @@
       <button data-tab="video">Video ST 2110-21</button>
       <button data-tab="profile">Paketprofil</button>
       <button data-tab="audio">Ton ST 2110-30</button>
+      <button data-tab="anc">Zusatzdaten ST 2110-40</button>
+      <button data-tab="hbrmt">SDI ST 2022-6</button>
       <button data-tab="ptp">PTP</button>
       <button data-tab="redundancy">ST 2022-7</button>
       <button data-tab="counters">Pakete</button>
@@ -71,14 +73,14 @@
           <div class="card-head"><h3>Flow hinzufügen</h3><button id="addFlowClose" type="button" class="btn">Schließen</button></div>
           <form id="addFlowForm" class="form-grid" autocomplete="off">
             <label>Art
-              <select name="kind"><option value="video">Video ST 2110-20</option><option value="audio">Ton ST 2110-30</option></select>
+              <select name="kind"><option value="video">Video ST 2110-20</option><option value="audio">Ton ST 2110-30</option><option value="anc">Zusatzdaten ST 2110-40</option><option value="hbrmt">SDI ST 2022-6</option></select>
             </label>
             <label>Name <input name="name" placeholder="z. B. Kamera 4"></label>
             <label>Adresse P <input name="address" required placeholder="239.100.0.1:20000"></label>
             <label>Quelle P (SSM) <input name="source" placeholder="optional"></label>
             <label>Adresse R (ST 2022-7) <input name="red" placeholder="optional"></label>
             <label>Quelle R <input name="redSource" placeholder="optional"></label>
-            <label data-kind="video">Format <input name="videoFormat" list="videoFormats" value="1920x1080p50"></label>
+            <label data-kind="video anc">Format (bei ANC zählen Bildrate und Zeilensprung) <input name="videoFormat" list="videoFormats" value="1920x1080p50"></label>
             <label data-kind="audio" hidden>Kodierung <input name="audioFormat" list="audioFormats" value="L24/48000/2"></label>
             <label data-kind="audio" hidden>Paketzeit
               <select name="ptime"><option value="0.125">125 µs</option><option value="0.25">250 µs</option><option value="0.333">333 µs</option><option value="1" selected>1 ms</option><option value="4">4 ms</option></select>
@@ -269,6 +271,8 @@
           <div class="card"><h3>Gesamt seit Zurücksetzen</h3><table class="kv" id="videoTotal"></table></div>
           <div class="card"><h3>Fehlerursachen</h3><table class="list" id="videoCauses"></table></div>
         </div>
+        <div class="card"><h3>Kriterien ST 2110-21 <span class="hint">letztes Bild gegen die Grenzen von MTL (Timing-Parser)</span></h3>
+          <div class="table-scroll"><table class="flows" id="videoCriteria"></table></div></div>
       </section>
 
       <!-- Paketprofil -->
@@ -305,6 +309,39 @@
           <div class="card"><h3>Letzter Zeitraum</h3><table class="kv" id="audioLast"></table></div>
           <div class="card"><h3>Format und Grenzwerte</h3><table class="kv" id="audioParams"></table></div>
         </div>
+      </section>
+
+      <!-- ST 2110-40 -->
+      <section data-view="anc" class="view">
+        <div class="tiles" id="ancTiles"></div>
+        <div class="grid two">
+          <figure class="card"><figcaption>ANC-Pakete je Bild</figcaption><canvas data-chart="ancPerFrame"></canvas></figure>
+          <figure class="card"><figcaption>Zeitbezug: erstes Paket gegen RTP-Sollzeit (µs)</figcaption><canvas data-chart="ancLatency"></canvas></figure>
+          <figure class="card"><figcaption>Zeitbezug-Histogramm (µs)</figcaption><canvas data-chart="ancLatHist"></canvas></figure>
+          <div class="card"><h3>Prüfungen</h3><table class="kv" id="ancChecks"></table></div>
+        </div>
+        <div class="card"><h3>Datenarten (DID / SDID) <span class="hint">Namen nach SMPTE-Registrierung; unbekannte Kennungen bleiben ohne Namen</span></h3>
+          <div class="table-scroll"><table class="flows" id="ancData"></table></div></div>
+        <div class="card"><h3>Letztes Bild <span class="hint" id="ancLastInfo"></span></h3>
+          <div class="table-scroll"><table class="flows" id="ancLast"></table></div>
+          <p class="hint">Parität und Prüfsumme der Nutzdatenwörter prüft MTL; fehlerhafte ANC-Pakete verwirft es, sie fehlen dann in dieser Liste.
+            ST 2110-40 hat kein Netzwerk-Zeitmodell wie ST 2110-21: Das Urteil beruht auf beobachteten Fehlern (Verlust, Marker, Zeitstempelschritt, Zeitbezug).</p></div>
+      </section>
+
+      <!-- ST 2022-6 -->
+      <section data-view="hbrmt" class="view">
+        <div class="tiles" id="hbrmtTiles"></div>
+        <div class="grid two">
+          <figure class="card"><figcaption>Datenrate (Mbit/s)</figcaption><canvas data-chart="hbrmtRate"></canvas></figure>
+          <figure class="card"><figcaption>Datagramme je Bild</figcaption><canvas data-chart="hbrmtDpf"></canvas></figure>
+        </div>
+        <div class="grid two">
+          <div class="card"><h3>Nutzdaten-Header <span class="hint">ST 2022-6, Abschnitt 6.4</span></h3><table class="kv" id="hbrmtHeader"></table></div>
+          <div class="card"><h3>Prüfungen</h3><table class="kv" id="hbrmtChecks"></table></div>
+        </div>
+        <p class="hint">MTL kennt ST 2022-6 nicht; die RTP-Pakete kommen im RTP-Passthrough und werden hier ausgewertet. ST 2022-6 hat kein
+          Netzwerk-Zeitmodell, und MTL liefert im Passthrough keine Ankunftszeiten: Paketabstände und Zeitwerte gegen PTP gibt es daher nicht.
+          Der Empfang ist noch nicht auf Hardware geprüft.</p>
       </section>
 
       <!-- PTP -->

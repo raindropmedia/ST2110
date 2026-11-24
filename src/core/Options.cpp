@@ -524,6 +524,8 @@ std::vector<FlowConfig> demoFlows() {
          "239.100.0.2:30000,red=239.101.0.2:30000,format=L24/48000/2,ptime=1,name=Kamera 1 Ton"},
         {Media::Video, "239.100.0.11:20000,format=1920x1080i50,name=Kamera 2"},
         {Media::Audio, "239.100.0.12:30000,format=L24/48000/8,ptime=0.125,name=Mischpult"},
+        {Media::Anc, "239.100.0.23:40000,format=1920x1080p50,pt=100,name=Zusatzdaten Kamera 1"},
+        {Media::Hbrmt, "239.100.0.40:5004,pt=98,name=SDI-Zuspieler (ST 2022-6)"},
     };
     for (const auto& [media, spec] : specs) {
         FlowConfig f;

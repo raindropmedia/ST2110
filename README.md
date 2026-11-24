@@ -133,6 +133,14 @@ sauber (SIGINT). `scripts/install-service.sh --remove` entfernt den Dienst, `/et
 Die Web-Oberfläche hat keine Anmeldung: `--http` an die Verwaltungsadresse binden, nicht an `0.0.0.0`; der
 Verwaltungsport darf nie in `ST2110_BIND_PORTS` stehen.
 
+**Weitere Flow-Arten:** `--anc <ip:port[,…]>` überwacht Zusatzdaten nach ST 2110-40 (Tab „Zusatzdaten ST 2110-40“: Zählung je
+DID/SDID mit Namen, Zeilen, RTP-Zeitstempelschritt, Zeitbezug zur PTP-Zeit, Verluste, letztes Bild; über `st40_rx` von
+MTL), `--hbrmt <ip:port[,…]>` SDI über IP nach ST 2022-6 (Tab „SDI ST 2022-6“: Nutzdaten-Header nach Abschnitt 6.4 mit
+Klartext, Sequenznummern, Datagramme je Bild gegen Abschnitt 6.5, FRCount, Zeitstempelschritt, Datenrate; MTL kennt
+ST 2022-6 nicht, die Pakete kommen im RTP-Passthrough). Beide auch per `--sdp` (`smpte291`, `SMPTE2022-6`), Oberfläche
+und Erkennung. Das Urteil heißt hier „in Ordnung / Warnung / Fehler“, weil beide kein narrow/wide kennen (ADR 0008).
+Die Demo enthält je einen Flow davon. Empfang noch nicht auf Hardware geprüft.
+
 **Tab „Zeitbezug ST 2110-10“:** Systemprüfung für jeden Flow aus vorhandenen Messwerten: PTP, RTP-Zeitstempel gegen PTP-Zeit
 (Latenz, bei Ton DPVR), Zeitstempelschritt und RTP-Offset (Grenzen von MTL), Paketverlust, vertauschte und doppelte
 Pakete, falscher Payload-Typ oder SSRC, Payload-Typ im dynamischen Bereich, Hardware-Zeitstempel. Ein eigenes

@@ -48,11 +48,15 @@ class DemoSource : public FlowController {
         StreamCounters counters;
         uint16_t sequence = 0;
         std::vector<float> toneBuffer;
+        std::vector<uint8_t> hbrmtBuffer; // ein RTP-Paket nach ST 2022-6, Felder je Paket überschrieben
+        uint64_t packetCounter = 0;
     };
 
     void run();
     void emitVideo(Generator& g, uint64_t frame, const SenderFaults& faults);
     void emitAudio(Generator& g, uint64_t packet, const SenderFaults& faults);
+    void emitAnc(Generator& g, uint64_t frame, const SenderFaults& faults);
+    void emitHbrmt(Generator& g, uint64_t frame, const SenderFaults& faults);
     void discoverVideo(const Generator& g, uint64_t frame, bool redundant, double skewNs);
     void discoverAudio(Generator& g, uint64_t firstPacket, uint32_t count);
     void announce();

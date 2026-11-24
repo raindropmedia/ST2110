@@ -13,3 +13,4 @@ Eine überholte Entscheidung wird nicht gelöscht, sondern auf „ersetzt durch 
 | [0005](0005-mehrere-flows-und-erkennung.md) | Mehrere Flows und Flow-Erkennung über eine Kernel-Schnittstelle | vorläufig angenommen |
 | [0006](0006-vorschau.md) | Bild- und Tonvorschau im Browser (JPEG über stb_image_write) | angenommen |
 | [0007](0007-testsender-und-erkennung-am-verwaltungsport.md) | Testsender in derselben MTL-Instanz, Erkennung am Verwaltungsport | angenommen |
+| [0008](0008-st2110-40-st2022-6-und-systempruefung.md) | ST 2110-40, ST 2022-6 und Systemprüfung ST 2110-10 | angenommen |

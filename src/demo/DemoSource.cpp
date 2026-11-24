@@ -1,5 +1,7 @@
 #include "demo/DemoSource.h"
 
+#include "core/AncAnalyzer.h"
+#include "core/HbrmtAnalyzer.h"
 #include "core/Preview.h"
 
 #include <algorithm>
@@ -28,8 +30,29 @@ uint32_t ipOf(const std::string& text) {
     return ntohl(addr.s_addr);
 }
 
+// Demo-ST-2022-6: SD-SDI 625 Zeilen, 25 Hz, 4:2:2 10 Bit (270 Mbit/s, rund 24 500 Datagramme je Sekunde).
+constexpr uint8_t kDemoHbrmtFrame = 0x11;
+constexpr uint8_t kDemoHbrmtRate = 0x18;
+constexpr uint8_t kDemoHbrmtSample = 0x01;
+constexpr double kDemoHbrmtPeriodNs = 40e6;
+
 double epochNs(const FlowConfig& c) {
-    return c.video ? framePeriodNs(c.video->format.rate) : packetTimeNs(c.audio->format.ptime);
+    if (c.video) {
+        return framePeriodNs(c.video->format.rate);
+    }
+    if (c.anc) {
+        return framePeriodNs(c.anc->format.rate);
+    }
+    if (c.hbrmt) {
+        return kDemoHbrmtPeriodNs;
+    }
+    return packetTimeNs(c.audio->format.ptime);
+}
+
+uint32_t rtpTicks(uint64_t ns, uint64_t hz) {
+    const uint64_t seconds = ns / 1'000'000'000ULL;
+    const uint64_t rest = ns % 1'000'000'000ULL;
+    return static_cast<uint32_t>(seconds * hz + rest * hz / 1'000'000'000ULL);
 }
 
 FlowConfig spec(Media media, const std::string& text) {
@@ -150,6 +173,8 @@ DemoSource::DemoSource(const Options& options, MonitorHub& hub) : hub_(hub) {
         spec(Media::Video, "239.100.0.21:20000,red=239.101.0.21:20000,format=1280x720p50,name=Kamera 3"),
         spec(Media::Audio, "239.100.0.22:30000,format=L24/48000/2,ptime=1,name=Kamera 3 Ton"),
         spec(Media::Audio, "239.100.0.31:30000,format=L24/48000/16,ptime=0.125,name=Saal-Mikrofone"),
+        spec(Media::Anc, "239.100.0.23:40000,format=1920x1080p50,pt=100,name=Zusatzdaten Kamera 1"),
+        spec(Media::Hbrmt, "239.100.0.40:5004,pt=98,name=SDI-Zuspieler (ST 2022-6)"),
     };
     for (const auto& flow : options.flows) {
         std::string error;
@@ -437,6 +462,90 @@ void DemoSource::previewLoop() {
     }
 }
 
+void DemoSource::emitAnc(Generator& g, uint64_t frame, const SenderFaults& faults) {
+    if (!g.monitor) {
+        return;
+    }
+    const double period = framePeriodNs(g.config.anc->format.rate);
+    const auto epoch = static_cast<uint64_t>(static_cast<long double>(frame) * period);
+    AncFrameReport r;
+    r.rtpTimestamp = rtpTicks(epoch, 90000);
+    r.firstPacketNs = epoch + 300'000 + (g.packetCounter++ % 7) * 5'000; // 0,3 ms hinter der Sollzeit
+    r.marker = true;
+    auto add = [&](uint8_t did, uint8_t sdid, uint16_t line, uint16_t udw) {
+        AncPacket p;
+        p.did = did;
+        p.sdid = sdid;
+        p.line = line;
+        p.horiOffset = 0;
+        p.udwSize = udw;
+        r.anc.push_back(p);
+    };
+    add(0x41, 0x01, 10, 4);  // Payload Identification
+    add(0x60, 0x60, 9, 16);  // Zeitcode ATC
+    add(0x41, 0x05, 11, 8);  // AFD
+    add(0x61, 0x01, 12, 42); // CEA-708
+    r.packets = 1;
+    if (faults.lossRate > 0 && frame % 40 == 0) {
+        r.seqLost = 1;
+        r.seqDiscont = true;
+        r.corrupted = true;
+        r.anc.pop_back();
+    }
+    g.counters.paths[0].packets += r.packets;
+    g.counters.paths[0].lost += r.seqLost;
+    g.counters.received += r.packets;
+    g.counters.lost += r.seqLost;
+    g.monitor->onAncFrame(r);
+}
+
+void DemoSource::emitHbrmt(Generator& g, uint64_t frame, const SenderFaults& faults) {
+    if (!g.monitor) {
+        return;
+    }
+    const uint32_t dpf = hbrmtExpectedDatagrams(kDemoHbrmtFrame, kDemoHbrmtRate, kDemoHbrmtSample);
+    const size_t headerBytes = 12 + 8 + 4;
+    if (g.hbrmtBuffer.empty()) {
+        g.hbrmtBuffer.assign(headerBytes + 1376, 0);
+        g.hbrmtBuffer[0] = 0x80;
+        g.hbrmtBuffer[8] = 0x53;
+        g.hbrmtBuffer[9] = 0x44;
+        g.hbrmtBuffer[10] = 0x49;
+        g.hbrmtBuffer[11] = 0x01;
+    }
+    auto& b = g.hbrmtBuffer;
+    const auto epoch = static_cast<uint64_t>(static_cast<long double>(frame) * kDemoHbrmtPeriodNs);
+    const uint32_t baseTs = rtpTicks(epoch, 27'000'000);
+    const auto step = static_cast<uint32_t>(kDemoHbrmtPeriodNs * 27e6 / 1e9 / dpf);
+    // Nutzdaten-Header: F=1, FRCount, R=2 (UTC), CF=1 (27 MHz), FRAME/FRATE/SAMPLE
+    const uint32_t w0 = (1u << 27) | (static_cast<uint32_t>(frame & 0xFF) << 16) | (2u << 14) | (1u << 5);
+    const uint32_t w1 = (static_cast<uint32_t>(kDemoHbrmtFrame) << 20) |
+                        (static_cast<uint32_t>(kDemoHbrmtRate) << 12) |
+                        (static_cast<uint32_t>(kDemoHbrmtSample) << 8);
+    auto put32 = [&](size_t at, uint32_t v) {
+        for (int i = 0; i < 4; ++i) {
+            b[at + static_cast<size_t>(i)] = static_cast<uint8_t>(v >> (24 - 8 * i));
+        }
+    };
+    put32(12, w0);
+    put32(16, w1);
+    for (uint32_t i = 0; i < dpf; ++i) {
+        const uint32_t ts = baseTs + i * step;
+        const uint16_t seq = static_cast<uint16_t>(g.sequence++);
+        b[1] = static_cast<uint8_t>((i + 1 == dpf ? 0x80 : 0x00) | 98);
+        b[2] = static_cast<uint8_t>(seq >> 8);
+        b[3] = static_cast<uint8_t>(seq);
+        put32(4, ts);
+        put32(20, ts); // Video-Zeitstempel im selben 27-MHz-Takt
+        ++g.packetCounter;
+        if (faults.lossRate > 0 && g.packetCounter % 2000 == 0) {
+            continue; // Paket geht im Netz verloren
+        }
+        g.monitor->onHbrmtPacket(b.data(), b.size());
+    }
+    g.counters.paths[0].packets += dpf;
+}
+
 void DemoSource::previewAudio(Generator& g, uint64_t firstPacket, uint64_t packets) {
     if (!g.monitor || !g.monitor->audioPreview().wanted(g.monitor->clockNow())) {
         return;
@@ -487,6 +596,14 @@ void DemoSource::run() {
                     for (; g.next + 1 < last && !stop_; ++g.next) {
                         emitVideo(g, g.next, faults);
                     }
+                } else if (g.config.anc) {
+                    for (; g.next + 1 < last && !stop_; ++g.next) {
+                        emitAnc(g, g.next, faults);
+                    }
+                } else if (g.config.hbrmt) {
+                    for (; g.next + 1 < last && !stop_; ++g.next) {
+                        emitHbrmt(g, g.next, faults);
+                    }
                 } else {
                     const uint64_t first = g.next;
                     for (; g.next + 2 < last && !stop_; ++g.next) {
@@ -532,6 +649,17 @@ void DemoSource::run() {
             anc.rtpPayload = 66;
             anc.timestamp = static_cast<uint32_t>(static_cast<uint64_t>(now / 20'000'000ULL) * 1800ULL);
             hub_.onDiscoveredPacket(anc, 25);
+            PacketInfo sdi;
+            sdi.srcIp = kSenderIp;
+            sdi.dstIp = (239u << 24) | (100u << 16) | 40;
+            sdi.srcPort = 10000;
+            sdi.dstPort = 5004;
+            sdi.wireBytes = 1442;
+            sdi.rtp = true;
+            sdi.payloadType = 98;
+            sdi.rtpPayload = 1388;
+            sdi.timestamp = static_cast<uint32_t>(now * 27ULL / 1000ULL); // 27 MHz
+            hub_.onDiscoveredPacket(sdi, 12000);
             nextExtras += std::chrono::milliseconds(500);
         }
         if (steady >= nextCounters) {

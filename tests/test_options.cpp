@@ -207,11 +207,13 @@ TEST_CASE("Demo hat mehrere Flows und braucht keinen Port") {
     auto result = parseOptions({"x", "--demo"});
     REQUIRE(result.options);
     const auto& flows = result.options->flows;
-    REQUIRE(flows.size() == 4);
+    REQUIRE(flows.size() == 6);
     CHECK(flows[0].label == "Kamera 1");
     CHECK(flows[0].redundant());
     CHECK(flows[2].formatName() == "1920x1080i50");
     CHECK(flows[3].formatName() == "L24/48000/8 125us");
+    CHECK(flows[4].anc.has_value());
+    CHECK(flows[5].hbrmt.has_value());
     CHECK(result.warnings.empty());
 }
 

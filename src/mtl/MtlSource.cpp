@@ -1,5 +1,6 @@
 #include "mtl/MtlSource.h"
 
+#include "core/AncAnalyzer.h"
 #include "core/TestSender.h"
 #include "core/TestSignal.h"
 
@@ -16,6 +17,7 @@
 #include <st20_api.h>
 #include <st30_api.h>
 #include <st30_pipeline_api.h>
+#include <st40_api.h>
 #include <st_pipeline_api.h>
 #include <thread>
 #include <vector>
@@ -358,6 +360,11 @@ class PreviewWorker {
 struct FlowSession {
     std::shared_ptr<FlowMonitor> monitor;
     st20_rx_handle video = nullptr;
+    st40_rx_handle anc = nullptr;
+    // ST 2022-6: RTP-Passthrough über eine st20-Sitzung auf RTP-Ebene; ein Thread holt die Pakete ab.
+    st20_rx_handle hbrmt = nullptr;
+    std::atomic<bool> hbrmtStop{false};
+    std::thread hbrmtThread;
     st30_rx_handle audio = nullptr;
     bool passKnown = false;
     PreviewWorker* previewWorker = nullptr;
@@ -421,6 +428,59 @@ struct FlowSession {
         return 0;
     }
 
+    // ST 2110-40: ein Bild mit den von MTL entpackten ANC-Paketen (Parität und Prüfsumme hat MTL geprüft).
+    static int onAncFrame(void* priv, void* frame, struct st40_rx_frame_meta* meta) {
+        auto* self = static_cast<FlowSession*>(priv);
+        AncFrameReport report;
+        report.rtpTimestamp = meta->rtp_timestamp;
+        report.firstPacketNs = meta->timestamp_first_pkt;
+        report.packets = meta->pkts_total;
+        report.seqLost = meta->seq_lost;
+        report.seqDiscont = meta->seq_discont;
+        report.marker = meta->rtp_marker;
+        report.interlaced = meta->interlaced;
+        report.secondField = meta->second_field;
+        report.corrupted = meta->status == ST_FRAME_STATUS_CORRUPTED;
+        for (uint32_t i = 0; i < meta->meta_num && meta->meta != nullptr; ++i) {
+            const struct st40_meta& m = meta->meta[i];
+            AncPacket p;
+            p.line = m.line_number;
+            p.horiOffset = m.hori_offset;
+            p.did = static_cast<uint8_t>(m.did & 0xFF);
+            p.sdid = static_cast<uint8_t>(m.sdid & 0xFF);
+            p.udwSize = m.udw_size;
+            p.luma = m.c != 0;
+            p.streamNum = static_cast<uint8_t>(m.stream_num);
+            report.anc.push_back(p);
+        }
+        self->monitor->onAncFrame(report);
+        st40_rx_put_framebuff(self->anc, frame);
+        return 0;
+    }
+
+    // ST 2022-6: Der Rückruf läuft im Datenpfad von MTL; die Pakete holt hbrmtLoop() ab.
+    static int onHbrmtReady(void*) { return 0; }
+
+    void hbrmtLoop() {
+        while (!hbrmtStop) {
+            int handled = 0;
+            while (handled < 512) {
+                void* usrptr = nullptr;
+                uint16_t len = 0;
+                void* mbuf = st20_rx_get_mbuf(hbrmt, &usrptr, &len);
+                if (mbuf == nullptr) {
+                    break;
+                }
+                monitor->onHbrmtPacket(static_cast<const uint8_t*>(usrptr), len);
+                st20_rx_put_mbuf(hbrmt, mbuf);
+                ++handled;
+            }
+            if (handled == 0) {
+                std::this_thread::sleep_for(std::chrono::microseconds(200));
+            }
+        }
+    }
+
 #ifdef ST20_RX_TP_PACKET_HOOK
     static void onVideoPacket(void* priv, enum mtl_session_port port, uint32_t rtp, uint64_t ns, int idx,
                               bool hw) {
@@ -442,9 +502,21 @@ struct FlowSession {
         while (previewBusy.load()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
+        if (hbrmt != nullptr) {
+            hbrmtStop = true;
+            if (hbrmtThread.joinable()) {
+                hbrmtThread.join();
+            }
+            st20_rx_free(hbrmt);
+            hbrmt = nullptr;
+        }
         if (video != nullptr) {
             st20_rx_free(video);
             video = nullptr;
+        }
+        if (anc != nullptr) {
+            st40_rx_free(anc);
+            anc = nullptr;
         }
         if (audio != nullptr) {
             st30_rx_free(audio);
@@ -573,6 +645,12 @@ struct MtlSource::Impl {
                         }
                     }
                 }
+                if (s->anc != nullptr) {
+                    struct st40_rx_user_stats stats {};
+                    if (st40_rx_get_session_stats(s->anc, &stats) >= 0) {
+                        s->monitor->setCounters(toCounters(stats.common, 0));
+                    }
+                }
                 if (s->audio != nullptr) {
                     struct st30_rx_user_stats stats {};
                     if (st30_rx_get_session_stats(s->audio, &stats) >= 0) {
@@ -639,6 +717,57 @@ struct MtlSource::Impl {
                     "st20_rx_create fehlgeschlagen (Format, Adresse oder Queues prüfen; Details im MTL-Log).";
                 return false;
             }
+            return true;
+        }
+        if (c.anc) {
+            const auto& d = *c.anc;
+            struct st40_rx_ops ops {};
+            ops.name = c.id.c_str();
+            ops.priv = &session;
+            if (!fillPorts(ops, d.primary, d.redundant, error)) {
+                return false;
+            }
+            ops.type = ST40_TYPE_FRAME_LEVEL;
+            ops.payload_type = d.payloadType;
+            ops.interlaced = d.format.interlaced;
+            ops.framebuff_cnt = 4;
+            ops.framebuff_size = 64 * 1024; // Nutzdatenwörter eines Bildes
+            ops.notify_frame_ready = &FlowSession::onAncFrame;
+            session.anc = st40_rx_create(mtl, &ops);
+            if (session.anc == nullptr) {
+                error = "st40_rx_create fehlgeschlagen (Adresse oder Queues prüfen; Details im MTL-Log).";
+                return false;
+            }
+            return true;
+        }
+        if (c.hbrmt) {
+            // ST 2022-6 kennt MTL nicht; RTP-Passthrough: MTL prüft Payload-Typ, reiht die RTP-Pakete in
+            // einen Ring, die Auswertung macht HbrmtAnalyzer. Die Bild- und Formatangaben der st20-Sitzung
+            // sind Platzhalter, die MTL beim Anlegen verlangt. Noch nicht auf Hardware geprüft.
+            const auto& h = *c.hbrmt;
+            struct st20_rx_ops ops {};
+            ops.name = c.id.c_str();
+            ops.priv = &session;
+            if (!fillPorts(ops, h.primary, h.redundant, error)) {
+                return false;
+            }
+            ops.type = ST20_TYPE_RTP_LEVEL;
+            ops.width = 1920;
+            ops.height = 1080;
+            ops.fps = ST_FPS_P50;
+            ops.interlaced = false;
+            ops.fmt = ST20_FMT_YUV_422_10BIT;
+            ops.payload_type = h.payloadType;
+            ops.rtp_ring_size = 16384;
+            ops.notify_rtp_ready = &FlowSession::onHbrmtReady;
+            session.hbrmt = st20_rx_create(mtl, &ops);
+            if (session.hbrmt == nullptr) {
+                error = "st20_rx_create (RTP-Passthrough für ST 2022-6) fehlgeschlagen (Adresse oder Queues "
+                        "prüfen; Details im MTL-Log).";
+                return false;
+            }
+            session.hbrmtStop = false;
+            session.hbrmtThread = std::thread([&session] { session.hbrmtLoop(); });
             return true;
         }
         const auto& a = *c.audio;

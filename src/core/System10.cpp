@@ -155,7 +155,9 @@ json buildSystem10(const json& flow, const json& ptp, bool ptpEnabled, bool hwTi
                                "Mehrere Sender im selben Multicast oder falscher Payload-Typ im SDP."));
     }
 
-    if (!counters.is_object()) {
+    const bool ownLoss =
+        std::any_of(checks.begin(), checks.end(), [](const json& c) { return c["id"] == "loss"; });
+    if (!counters.is_object() && !ownLoss) {
         checks.push_back(check("loss", "Paketverlust (Sequenznummern)", "keine Zähler", "0", "na",
                                "Die Quelle liefert keine Paketzähler."));
     }
